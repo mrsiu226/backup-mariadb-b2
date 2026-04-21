@@ -132,12 +132,13 @@ cmd_config() {
 cmd_cron() {
     check_installed
     section "Cronjob"
-    CRON_LINE=$(crontab -l 2>/dev/null | grep -v "^#" | grep "backup-mariadb-b2\|backup\.sh" | head -1)
+    CRON_LINE=$(crontab -l 2>/dev/null | grep -v "^#" | grep -E "backup-mariadb-b2|backup\.sh" | head -1)
     if [[ -n "${CRON_LINE}" ]]; then
         ok "Cronjob hiện tại:"
         echo "    ${CRON_LINE}"
     else
-        warn "Chưa có cronjob"
+        warn "Chưa có cronjob. Thêm bằng lệnh:"
+        echo "    (crontab -l; echo '# backup-mariadb-b2'; echo '30 2 * * * /bin/bash ${INSTALL_DIR}/backup.sh >> /root/logs/backup_cron.log 2>&1') | crontab -"
     fi
     echo ""
     info "Crontab đầy đủ:"
