@@ -4,11 +4,28 @@
 # Usage: curl -fsSL https://raw.githubusercontent.com/mrsiu226/backup-mariadb-b2/main/install.sh | sudo bash
 #==============================================================================
 
-set -euo pipefail
-
 # --- Config ------------------------------------------------------------------
 GITHUB_RAW="https://raw.githubusercontent.com/mrsiu226/backup-mariadb-b2/main"
 INSTALL_DIR="/opt/backup-mariadb-b2"
+
+# Chuyển stdin về /dev/tty ngay lập tức để đọc user input được
+# khi script chạy qua pipe: curl ... | bash
+if [[ -t 0 ]]; then
+    : # stdin đã là terminal
+elif exec < /dev/tty 2>/dev/null; then
+    : # redirect thành công
+else
+    echo ""
+    echo "  ⚠  Không thể mở /dev/tty. Vui lòng chạy theo cách sau:"
+    echo ""
+    echo "  curl -fsSL ${GITHUB_RAW}/install.sh -o /tmp/install.sh && sudo bash /tmp/install.sh"
+    echo ""
+    exit 1
+fi
+
+# Bật strict mode SAU khi đã xử lý tty (tránh set -e bắt lỗi exec)
+set -euo pipefail
+
 
 # --- Colors ------------------------------------------------------------------
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -20,15 +37,7 @@ log_warn()    { echo -e "${YELLOW}  ⚠${NC}  $1"; }
 log_error()   { echo -e "${RED}  ✘  ERROR: $1${NC}"; exit 1; }
 log_section() { echo -e "\n${BOLD}${CYAN}━━━ $1 ━━━${NC}"; }
 
-# Input helper — prompt ra stderr, đọc từ /dev/tty (fallback stdin)
-# Tương thích curl | bash vì không dùng > /dev/tty cho output
-_tty_read() {
-    if [[ -r /dev/tty ]]; then read -r "$@" < /dev/tty; else read -r "$@"; fi
-}
-_tty_read_s() {
-    if [[ -r /dev/tty ]]; then read -rs "$@" < /dev/tty; else read -rs "$@"; fi
-}
-
+# Input helpers — prompt ra stderr, read từ stdin (đã được exec redirect về /dev/tty)
 ask() {
     local prompt="$1" default="${2:-}" var_name="$3"
     local input
@@ -37,7 +46,7 @@ ask() {
     else
         printf "%b" "${BOLD}  ${prompt}${NC}: " >&2
     fi
-    _tty_read input
+    read -r input
     input="${input:-${default}}"
     printf -v "${var_name}" '%s' "${input}"
 }
@@ -46,7 +55,7 @@ ask_secret() {
     local prompt="$1" var_name="$2"
     local input
     printf "%b" "${BOLD}  ${prompt}${NC}: " >&2
-    _tty_read_s input
+    read -rs input
     echo "" >&2
     printf -v "${var_name}" '%s' "${input}"
 }
@@ -59,7 +68,7 @@ ask_yn() {
     else
         printf "%b" "${BOLD}  ${prompt}${NC} ${CYAN}[y/N]${NC}: " >&2
     fi
-    _tty_read input
+    read -r input
     input="${input:-${default}}"
     printf -v "${var_name}" '%s' "${input,,}"
 }
