@@ -73,54 +73,135 @@ echo -e "  Date     : $(date '+%Y-%m-%d %H:%M:%S')"
 echo ""
 
 #==============================================================================
+# AUTO-DETECT: Load defaults từ rclone/config.env có sẵn
+#==============================================================================
+
+# Defaults ban đầu
+_DEF_B2_ACCOUNT=""
+_DEF_B2_KEY=""
+_DEF_B2_BUCKET="mariadb-backups"
+_DEF_B2_REMOTE="b2"
+_DEF_MYSQL_USER="backup_user"
+_DEF_MYSQL_PASS=""
+_DEF_MYSQL_HOST="localhost"
+_DEF_LOCAL_DAYS="3"
+_DEF_B2_DAYS="30"
+_DEF_EXCLUDE="information_schema performance_schema sys mysql"
+_DEF_CRON_HOUR="2"
+_DEF_CRON_MIN="30"
+_DEF_TG_TOKEN=""
+_DEF_TG_CHAT=""
+
+# 1. Thử load từ config.env đã cài trước
+if [[ -f "${INSTALL_DIR}/config.env" ]]; then
+    source "${INSTALL_DIR}/config.env" 2>/dev/null || true
+    _DEF_B2_ACCOUNT="${B2_ACCOUNT_ID:-}"
+    _DEF_B2_KEY="${B2_APPLICATION_KEY:-}"
+    _DEF_B2_BUCKET="${B2_BUCKET:-mariadb-backups}"
+    _DEF_B2_REMOTE="${B2_REMOTE_NAME:-b2}"
+    _DEF_MYSQL_USER="${MYSQL_BACKUP_USER:-backup_user}"
+    _DEF_MYSQL_PASS="${MYSQL_BACKUP_PASSWORD:-}"
+    _DEF_MYSQL_HOST="${MYSQL_HOST:-localhost}"
+    _DEF_LOCAL_DAYS="${LOCAL_RETENTION_DAYS:-3}"
+    _DEF_B2_DAYS="${B2_RETENTION_DAYS:-30}"
+    _DEF_EXCLUDE="${EXCLUDE_DBS:-information_schema performance_schema sys mysql}"
+    _DEF_CRON_HOUR="${CRON_HOUR:-2}"
+    _DEF_CRON_MIN="${CRON_MINUTE:-30}"
+    _DEF_TG_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
+    _DEF_TG_CHAT="${TELEGRAM_CHAT_ID:-}"
+    echo -e "  ${GREEN}✔  Phát hiện cấu hình cũ tại ${INSTALL_DIR}/config.env — dùng làm mặc định${NC}\n"
+fi
+
+# 2. Thử detect từ rclone nếu chưa có account/key
+if command -v rclone > /dev/null 2>&1 && [[ -z "${_DEF_B2_ACCOUNT}" ]]; then
+    RCLONE_CONF_PATH="${HOME}/.config/rclone/rclone.conf"
+    if [[ -f "${RCLONE_CONF_PATH}" ]]; then
+        # Tìm section type = b2
+        _DETECTED_REMOTE=$(awk '/^\[/{remote=$0} /type = b2/{print remote}' "${RCLONE_CONF_PATH}" \
+            | tr -d '[]' | head -1)
+        if [[ -n "${_DETECTED_REMOTE}" ]]; then
+            _DEF_B2_REMOTE="${_DETECTED_REMOTE}"
+            _DEF_B2_ACCOUNT=$(awk "/^\[${_DETECTED_REMOTE}\]/,/^\[/" "${RCLONE_CONF_PATH}" \
+                | grep '^account' | awk '{print $3}' | head -1)
+            _DEF_B2_KEY=$(awk "/^\[${_DETECTED_REMOTE}\]/,/^\[/" "${RCLONE_CONF_PATH}" \
+                | grep '^key' | awk '{print $3}' | head -1)
+            echo -e "  ${GREEN}✔  Phát hiện rclone B2 remote '${_DETECTED_REMOTE}' — dùng làm mặc định${NC}\n"
+        fi
+    fi
+fi
+
+#==============================================================================
 # STEP 1: COLLECT CONFIG (Interactive)
 #==============================================================================
 log_section "Bước 1/6 — Cấu hình Backblaze B2"
-echo -e "  ${YELLOW}Lấy thông tin tại: https://secure.backblaze.com/app_keys.htm${NC}\n"
+if [[ -n "${_DEF_B2_ACCOUNT}" ]]; then
+    echo -e "  ${CYAN}Đã phát hiện cấu hình B2 có sẵn. Nhấn Enter để giữ nguyên.${NC}\n"
+else
+    echo -e "  ${YELLOW}Lấy thông tin tại: https://secure.backblaze.com/app_keys.htm${NC}\n"
+fi
 
-ask "B2 Account ID (Application Key ID)" "" B2_ACCOUNT_ID
-ask "B2 Application Key" "" B2_APPLICATION_KEY
-ask "B2 Bucket name" "mariadb-backups" B2_BUCKET
-ask "B2 Remote name (tên trong rclone)" "b2" B2_REMOTE_NAME
+ask "B2 Account ID (Application Key ID)" "${_DEF_B2_ACCOUNT}" B2_ACCOUNT_ID
+ask "B2 Application Key" "${_DEF_B2_KEY}" B2_APPLICATION_KEY
+ask "B2 Bucket name" "${_DEF_B2_BUCKET}" B2_BUCKET
+ask "B2 Remote name (tên trong rclone)" "${_DEF_B2_REMOTE}" B2_REMOTE_NAME
 
-[[ -z "${B2_ACCOUNT_ID}" ]]    && log_error "B2 Account ID không được để trống"
+[[ -z "${B2_ACCOUNT_ID}" ]]     && log_error "B2 Account ID không được để trống"
 [[ -z "${B2_APPLICATION_KEY}" ]] && log_error "B2 Application Key không được để trống"
 
 log_section "Bước 2/6 — Cấu hình MariaDB"
-echo -e "  ${YELLOW}Tạo user backup riêng (KHÔNG dùng root)${NC}\n"
+if [[ -n "${_DEF_MYSQL_PASS}" ]]; then
+    echo -e "  ${CYAN}Đã phát hiện cấu hình MariaDB có sẵn. Nhấn Enter để giữ nguyên.${NC}\n"
+else
+    echo -e "  ${YELLOW}Tạo user backup riêng (KHÔNG dùng root)${NC}\n"
+fi
 
-ask "Tên user backup MariaDB" "backup_user" MYSQL_BACKUP_USER
-ask_secret "Password cho user '${MYSQL_BACKUP_USER}'" MYSQL_BACKUP_PASSWORD
-ask "MySQL host" "localhost" MYSQL_HOST
+ask "Tên user backup MariaDB" "${_DEF_MYSQL_USER}" MYSQL_BACKUP_USER
 
-[[ -z "${MYSQL_BACKUP_PASSWORD}" ]] && log_error "Password không được để trống"
+if [[ -n "${_DEF_MYSQL_PASS}" ]]; then
+    # Có password cũ — hỏi có muốn giữ không
+    ask_yn "Giữ nguyên password cũ cho '${MYSQL_BACKUP_USER}'?" "y" _KEEP_PASS
+    if [[ "${_KEEP_PASS}" == "y" ]]; then
+        MYSQL_BACKUP_PASSWORD="${_DEF_MYSQL_PASS}"
+    else
+        ask_secret "Password mới cho '${MYSQL_BACKUP_USER}'" MYSQL_BACKUP_PASSWORD
+        [[ -z "${MYSQL_BACKUP_PASSWORD}" ]] && log_error "Password không được để trống"
+        ask_secret "Nhập lại password để xác nhận" MYSQL_BACKUP_PASSWORD_CONFIRM
+        [[ "${MYSQL_BACKUP_PASSWORD}" != "${MYSQL_BACKUP_PASSWORD_CONFIRM}" ]] \
+            && log_error "Password không khớp. Chạy lại installer."
+    fi
+else
+    ask_secret "Password cho user '${MYSQL_BACKUP_USER}'" MYSQL_BACKUP_PASSWORD
+    [[ -z "${MYSQL_BACKUP_PASSWORD}" ]] && log_error "Password không được để trống"
+    ask_secret "Nhập lại password để xác nhận" MYSQL_BACKUP_PASSWORD_CONFIRM
+    [[ "${MYSQL_BACKUP_PASSWORD}" != "${MYSQL_BACKUP_PASSWORD_CONFIRM}" ]] \
+        && log_error "Password không khớp. Chạy lại installer."
+fi
 
-# Confirm password
-ask_secret "Nhập lại password để xác nhận" MYSQL_BACKUP_PASSWORD_CONFIRM
-[[ "${MYSQL_BACKUP_PASSWORD}" != "${MYSQL_BACKUP_PASSWORD_CONFIRM}" ]] \
-    && log_error "Password không khớp. Chạy lại installer."
+ask "MySQL host" "${_DEF_MYSQL_HOST}" MYSQL_HOST
 
 log_section "Bước 3/6 — Cấu hình Backup"
 
-ask "Giữ backup local bao nhiêu ngày" "3" LOCAL_RETENTION_DAYS
-ask "Giữ backup trên B2 bao nhiêu ngày" "30" B2_RETENTION_DAYS
-ask "Databases loại trừ khi backup" "information_schema performance_schema sys mysql" EXCLUDE_DBS
+ask "Giữ backup local bao nhiêu ngày" "${_DEF_LOCAL_DAYS}" LOCAL_RETENTION_DAYS
+ask "Giữ backup trên B2 bao nhiêu ngày" "${_DEF_B2_DAYS}" B2_RETENTION_DAYS
+ask "Databases loại trừ khi backup" "${_DEF_EXCLUDE}" EXCLUDE_DBS
 
 log_section "Bước 4/6 — Cấu hình Cronjob"
 
-ask "Giờ chạy backup (0-23)" "2" CRON_HOUR
-ask "Phút chạy backup (0-59)" "30" CRON_MINUTE
+ask "Giờ chạy backup (0-23)" "${_DEF_CRON_HOUR}" CRON_HOUR
+ask "Phút chạy backup (0-59)" "${_DEF_CRON_MIN}" CRON_MINUTE
 echo -e "  ${CYAN}→ Backup sẽ chạy lúc ${CRON_HOUR}:$(printf '%02d' ${CRON_MINUTE}) mỗi ngày${NC}"
 
 log_section "Bước 5/6 — Telegram Notification (tùy chọn)"
 
-ask_yn "Bạn có muốn nhận thông báo Telegram không?" "n" USE_TELEGRAM
+_DEF_USE_TG="n"
+[[ -n "${_DEF_TG_TOKEN}" ]] && _DEF_USE_TG="y"
+ask_yn "Bạn có muốn nhận thông báo Telegram không?" "${_DEF_USE_TG}" USE_TELEGRAM
 
 TELEGRAM_BOT_TOKEN=""
 TELEGRAM_CHAT_ID=""
 if [[ "${USE_TELEGRAM}" == "y" ]]; then
-    ask "Telegram Bot Token" "" TELEGRAM_BOT_TOKEN
-    ask "Telegram Chat ID" "" TELEGRAM_CHAT_ID
+    ask "Telegram Bot Token" "${_DEF_TG_TOKEN}" TELEGRAM_BOT_TOKEN
+    ask "Telegram Chat ID" "${_DEF_TG_CHAT}" TELEGRAM_CHAT_ID
 fi
 
 #==============================================================================
