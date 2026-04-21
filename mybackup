@@ -124,14 +124,26 @@ cmd_setup() {
         local RCLONE_CONF_PATH="${HOME}/.config/rclone/rclone.conf"
         if [[ -f "${RCLONE_CONF_PATH}" ]]; then
             local _DETECTED_REMOTE
-            _DETECTED_REMOTE=$(awk '/^\[/{remote=$0} /type = b2/{print remote}' "${RCLONE_CONF_PATH}" \
-                | tr -d '[]' | head -1)
+            _DETECTED_REMOTE=$(awk '
+                /^\[/ { section = $0; sub(/^\[/, "", section); sub(/\].*$/, "", section) }
+                /^type[[:space:]]*=[[:space:]]*b2[[:space:]]*$/ { print section; exit }
+            ' "${RCLONE_CONF_PATH}")
             if [[ -n "${_DETECTED_REMOTE}" ]]; then
                 _DEF_B2_REMOTE="${_DETECTED_REMOTE}"
-                _DEF_B2_ACCOUNT=$(awk "/^\[${_DETECTED_REMOTE}\]/,/^\[/" "${RCLONE_CONF_PATH}" \
-                    | grep '^account' | awk '{print $3}' | head -1)
-                _DEF_B2_KEY=$(awk "/^\[${_DETECTED_REMOTE}\]/,/^\[/" "${RCLONE_CONF_PATH}" \
-                    | grep '^key' | awk '{print $3}' | head -1)
+                _DEF_B2_ACCOUNT=$(awk -v r="${_DETECTED_REMOTE}" '
+                    /^\[/ { in_section = ($0 == "[" r "]") ? 1 : 0; next }
+                    in_section && /^account[[:space:]]*=/ {
+                        sub(/^account[[:space:]]*=[[:space:]]*/, "")
+                        print; exit
+                    }
+                ' "${RCLONE_CONF_PATH}")
+                _DEF_B2_KEY=$(awk -v r="${_DETECTED_REMOTE}" '
+                    /^\[/ { in_section = ($0 == "[" r "]") ? 1 : 0; next }
+                    in_section && /^key[[:space:]]*=/ {
+                        sub(/^key[[:space:]]*=[[:space:]]*/, "")
+                        print; exit
+                    }
+                ' "${RCLONE_CONF_PATH}")
                 echo -e "  ${GREEN}✔  Phát hiện rclone B2 remote '${_DETECTED_REMOTE}'${NC}\n"
             fi
         fi
