@@ -20,16 +20,24 @@ log_warn()    { echo -e "${YELLOW}  ⚠${NC}  $1"; }
 log_error()   { echo -e "${RED}  ✘  ERROR: $1${NC}"; exit 1; }
 log_section() { echo -e "\n${BOLD}${CYAN}━━━ $1 ━━━${NC}"; }
 
-# Đọc input từ /dev/tty (hoạt động cả khi pipe từ curl)
+# Input helper — prompt ra stderr, đọc từ /dev/tty (fallback stdin)
+# Tương thích curl | bash vì không dùng > /dev/tty cho output
+_tty_read() {
+    if [[ -r /dev/tty ]]; then read -r "$@" < /dev/tty; else read -r "$@"; fi
+}
+_tty_read_s() {
+    if [[ -r /dev/tty ]]; then read -rs "$@" < /dev/tty; else read -rs "$@"; fi
+}
+
 ask() {
     local prompt="$1" default="${2:-}" var_name="$3"
     local input
     if [[ -n "${default}" ]]; then
-        echo -ne "${BOLD}  ${prompt}${NC} ${CYAN}[${default}]${NC}: " > /dev/tty
+        printf "%b" "${BOLD}  ${prompt}${NC} ${CYAN}[${default}]${NC}: " >&2
     else
-        echo -ne "${BOLD}  ${prompt}${NC}: " > /dev/tty
+        printf "%b" "${BOLD}  ${prompt}${NC}: " >&2
     fi
-    read -r input < /dev/tty
+    _tty_read input
     input="${input:-${default}}"
     printf -v "${var_name}" '%s' "${input}"
 }
@@ -37,9 +45,9 @@ ask() {
 ask_secret() {
     local prompt="$1" var_name="$2"
     local input
-    echo -ne "${BOLD}  ${prompt}${NC}: " > /dev/tty
-    read -rs input < /dev/tty
-    echo "" > /dev/tty
+    printf "%b" "${BOLD}  ${prompt}${NC}: " >&2
+    _tty_read_s input
+    echo "" >&2
     printf -v "${var_name}" '%s' "${input}"
 }
 
@@ -47,11 +55,11 @@ ask_yn() {
     local prompt="$1" default="${2:-y}" var_name="$3"
     local input
     if [[ "${default}" == "y" ]]; then
-        echo -ne "${BOLD}  ${prompt}${NC} ${CYAN}[Y/n]${NC}: " > /dev/tty
+        printf "%b" "${BOLD}  ${prompt}${NC} ${CYAN}[Y/n]${NC}: " >&2
     else
-        echo -ne "${BOLD}  ${prompt}${NC} ${CYAN}[y/N]${NC}: " > /dev/tty
+        printf "%b" "${BOLD}  ${prompt}${NC} ${CYAN}[y/N]${NC}: " >&2
     fi
-    read -r input < /dev/tty
+    _tty_read input
     input="${input:-${default}}"
     printf -v "${var_name}" '%s' "${input,,}"
 }
