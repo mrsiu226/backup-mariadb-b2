@@ -1,0 +1,14 @@
+# Credentials - KHÔNG bao giờ commit file này
+config.env
+.my.cnf
+
+# Logs
+*.log
+logs/
+
+# Backups
+backups/
+
+# OS
+.DS_Store
+Thumbs.db
