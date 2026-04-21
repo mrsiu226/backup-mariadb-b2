@@ -5,13 +5,23 @@ Quản lý dễ dàng qua CLI `mybackup` sau khi cài.
 
 ---
 
-## 🚀 Cài đặt (1 lệnh duy nhất)
+## 🚀 Cài đặt (2 bước)
+
+**Bước 1 — cài scripts (non-interactive):**
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/mrsiu226/backup-mariadb-b2/main/install.sh | sudo bash
 ```
 
-Installer sẽ hỏi từng bước:
+Installer chỉ tải file + cài dependencies (rclone, mariadb-client, ...). Không hỏi gì.
+
+**Bước 2 — cấu hình interactive:**
+
+```bash
+sudo mybackup --setup
+```
+
+Wizard sẽ hỏi từng bước:
 
 | Bước | Nội dung |
 |------|----------|
@@ -20,9 +30,10 @@ Installer sẽ hỏi từng bước:
 | 3 | Retention days (local + B2) |
 | 4 | Lịch cronjob |
 | 5 | Telegram notification (tùy chọn) |
-| 6 | Cài đặt + chạy thử |
 
-> **Auto-detect:** Nếu server đã có rclone B2 hoặc cài trước đó, installer tự điền sẵn thông tin — chỉ cần nhấn Enter.
+> **Auto-detect:** Nếu server đã có rclone B2 hoặc config cũ, wizard tự điền sẵn — chỉ cần nhấn Enter.
+>
+> **Vì sao tách 2 bước?** `curl | sudo bash` không có terminal interactive trên nhiều VPS (Contabo, etc.) nên không đọc được input. Tách riêng bước setup tránh hoàn toàn vấn đề này.
 
 ---
 
@@ -37,13 +48,13 @@ mybackup                  # Interactive menu (chọn 1-7)
 ### Commands
 
 ```bash
+sudo mybackup --setup     # Wizard cấu hình (lần đầu hoặc thay đổi)
 mybackup --run            # Chạy backup ngay lập tức
 mybackup --status         # Trạng thái + log gần nhất + B2 file count
 mybackup --logs           # Xem 50 dòng log cuối
 mybackup --cron           # Xem cronjob hiện tại
-mybackup --update         # Cập nhật backup.sh từ GitHub
-mybackup --config         # Chạy lại wizard cấu hình
-mybackup --uninstall      # Gỡ bỏ hoàn toàn
+mybackup --update         # Cập nhật backup.sh + mybackup từ GitHub
+sudo mybackup --uninstall # Gỡ bỏ hoàn toàn
 mybackup --help           # Hiển thị help
 ```
 
