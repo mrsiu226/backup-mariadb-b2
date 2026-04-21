@@ -322,6 +322,14 @@ curl -fsSL "${GITHUB_RAW}/backup.sh" -o "${INSTALL_DIR}/backup.sh" \
     || log_error "Không thể tải backup.sh từ GitHub"
 chmod +x "${INSTALL_DIR}/backup.sh"
 
+log_info "Tải và cài mybackup CLI..."
+curl -fsSL "${GITHUB_RAW}/mybackup" -o "${INSTALL_DIR}/mybackup" \
+    && log_ok "mybackup đã tải" \
+    || log_error "Không thể tải mybackup từ GitHub"
+chmod +x "${INSTALL_DIR}/mybackup"
+ln -sf "${INSTALL_DIR}/mybackup" /usr/local/bin/mybackup
+log_ok "mybackup đã cài tại /usr/local/bin/mybackup"
+
 #==============================================================================
 # CREATE CONFIG FILES
 #==============================================================================

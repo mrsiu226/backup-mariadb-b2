@@ -1,0 +1,265 @@
+#!/usr/bin/env bash
+#==============================================================================
+# mybackup — CLI quản lý MariaDB B2 Backup
+# Được cài tự động bởi install.sh
+# Usage: mybackup [command]
+#==============================================================================
+
+INSTALL_DIR="/opt/backup-mariadb-b2"
+CONFIG_FILE="${INSTALL_DIR}/config.env"
+GITHUB_RAW="https://raw.githubusercontent.com/mrsiu226/backup-mariadb-b2/main"
+
+# Colors
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
+BLUE='\033[0;34m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
+
+# Load config nếu có
+[[ -f "${CONFIG_FILE}" ]] && source "${CONFIG_FILE}" 2>/dev/null || true
+
+#--- Helpers ------------------------------------------------------------------
+ok()      { echo -e "${GREEN}  ✔${NC}  $1"; }
+info()    { echo -e "${BLUE}  →${NC}  $1"; }
+warn()    { echo -e "${YELLOW}  ⚠${NC}  $1"; }
+err()     { echo -e "${RED}  ✘${NC}  $1"; }
+section() { echo -e "\n${BOLD}${CYAN}━━━ $1 ━━━${NC}"; }
+
+ask_yn() {
+    local prompt="$1" default="${2:-y}" var_name="$3" input
+    [[ "${default}" == "y" ]] \
+        && echo -ne "${BOLD}  ${prompt}${NC} ${CYAN}[Y/n]${NC}: " \
+        || echo -ne "${BOLD}  ${prompt}${NC} ${CYAN}[y/N]${NC}: "
+    read -r input
+    printf -v "${var_name}" '%s' "${input:-${default}}"
+}
+
+header() {
+    echo -e "${BOLD}${CYAN}"
+    echo "  ╔══════════════════════════════════════════╗"
+    echo "  ║       mybackup — MariaDB B2 Backup       ║"
+    echo "  ╚══════════════════════════════════════════╝"
+    echo -e "${NC}"
+    echo -e "  Hostname : ${BOLD}$(hostname)${NC} | $(date '+%Y-%m-%d %H:%M:%S')"
+}
+
+check_installed() {
+    if [[ ! -f "${INSTALL_DIR}/backup.sh" ]]; then
+        err "Chưa cài đặt. Chạy:"
+        echo -e "  ${CYAN}curl -fsSL ${GITHUB_RAW}/install.sh | sudo bash${NC}"
+        exit 1
+    fi
+}
+
+#==============================================================================
+# COMMANDS
+#==============================================================================
+
+cmd_run() {
+    check_installed
+    section "Chạy backup ngay"
+    info "Đang backup tất cả databases → B2..."
+    bash "${INSTALL_DIR}/backup.sh"
+}
+
+cmd_status() {
+    check_installed
+    section "Trạng thái backup"
+
+    # Cronjob
+    CRON_LINE=$(crontab -l 2>/dev/null | grep "backup-mariadb-b2" -A1 | grep -v "^#" | head -1)
+    if [[ -n "${CRON_LINE}" ]]; then
+        ok "Cronjob: ${CRON_LINE}"
+    else
+        warn "Cronjob chưa được cài"
+    fi
+
+    # Log gần nhất
+    LATEST_LOG=$(ls -1t /root/logs/backup_mariadb_*.log 2>/dev/null | head -1)
+    if [[ -n "${LATEST_LOG}" ]]; then
+        echo ""
+        info "Log gần nhất: ${LATEST_LOG}"
+        echo ""
+        # Lấy summary từ log
+        grep -E "✅ Backup completed|Databases|Total size|Remote|❌ ERROR" \
+            "${LATEST_LOG}" 2>/dev/null | tail -10 | sed 's/^/    /'
+    else
+        warn "Chưa có log backup nào"
+    fi
+
+    # B2 remote
+    echo ""
+    if [[ -n "${B2_REMOTE_NAME:-}" ]] && command -v rclone > /dev/null 2>&1; then
+        if rclone listremotes 2>/dev/null | grep -q "^${B2_REMOTE_NAME}:"; then
+            ok "rclone remote '${B2_REMOTE_NAME}' đang hoạt động"
+            # Đếm số file trên B2
+            B2_COUNT=$(rclone ls "${B2_REMOTE_NAME}:${B2_BUCKET:-}/" 2>/dev/null | wc -l || echo "?")
+            info "Tổng files trên B2: ${B2_COUNT}"
+        else
+            warn "rclone remote '${B2_REMOTE_NAME}' không tìm thấy"
+        fi
+    fi
+}
+
+cmd_logs() {
+    check_installed
+    section "Logs"
+    LATEST_LOG=$(ls -1t /root/logs/backup_mariadb_*.log 2>/dev/null | head -1)
+    if [[ -z "${LATEST_LOG}" ]]; then
+        warn "Chưa có log nào"
+        exit 0
+    fi
+    info "File: ${LATEST_LOG}"
+    echo ""
+    tail -50 "${LATEST_LOG}"
+}
+
+cmd_update() {
+    check_installed
+    section "Cập nhật backup.sh"
+    info "Đang tải backup.sh mới nhất từ GitHub..."
+    curl -fsSL "${GITHUB_RAW}/backup.sh" -o "${INSTALL_DIR}/backup.sh" \
+        && chmod +x "${INSTALL_DIR}/backup.sh" \
+        && ok "Cập nhật thành công!" \
+        || err "Không thể tải từ GitHub"
+}
+
+cmd_config() {
+    check_installed
+    section "Cấu hình lại"
+    info "Chạy lại installer để cập nhật cấu hình..."
+    curl -fsSL "${GITHUB_RAW}/install.sh" | sudo bash
+}
+
+cmd_cron() {
+    check_installed
+    section "Cronjob"
+    CRON_LINE=$(crontab -l 2>/dev/null | grep -v "^#" | grep "backup-mariadb-b2\|backup\.sh" | head -1)
+    if [[ -n "${CRON_LINE}" ]]; then
+        ok "Cronjob hiện tại:"
+        echo "    ${CRON_LINE}"
+    else
+        warn "Chưa có cronjob"
+    fi
+    echo ""
+    info "Crontab đầy đủ:"
+    crontab -l 2>/dev/null | grep -v "^$" | sed 's/^/    /'
+}
+
+cmd_uninstall() {
+    check_installed
+    header
+    section "Gỡ cài đặt"
+    echo ""
+    echo -e "  ${RED}${BOLD}Thao tác này sẽ xóa:${NC}"
+    echo "    ✗ ${INSTALL_DIR}/ (scripts + config)"
+    echo "    ✗ /usr/local/bin/mybackup"
+    echo "    ✗ Cronjob backup"
+    echo ""
+    echo -e "  ${YELLOW}Sẽ GIỮ lại:${NC}"
+    echo "    ✓ /root/backups/mariadb/ (backup files)"
+    echo "    ✓ /root/logs/ (log files)"
+    echo "    ✓ MariaDB user '${MYSQL_BACKUP_USER:-backup_user}'"
+    echo "    ✓ rclone config"
+    echo ""
+
+    ask_yn "Bạn có chắc muốn gỡ cài đặt không?" "n" CONFIRM
+    [[ "${CONFIRM,,}" != "y" ]] && echo "  Đã hủy." && exit 0
+
+    # Xóa cronjob
+    info "Xóa cronjob..."
+    ( crontab -l 2>/dev/null | grep -v "backup-mariadb-b2" | grep -v "backup\.sh" ) | crontab - 2>/dev/null || true
+    ok "Cronjob đã xóa"
+
+    # Xóa CLI
+    info "Xóa /usr/local/bin/mybackup..."
+    rm -f /usr/local/bin/mybackup
+    ok "mybackup CLI đã xóa"
+
+    # Xóa install dir
+    info "Xóa ${INSTALL_DIR}..."
+    rm -rf "${INSTALL_DIR}"
+    ok "${INSTALL_DIR} đã xóa"
+
+    echo ""
+    echo -e "${GREEN}  ✅ Gỡ cài đặt hoàn tất!${NC}"
+    echo ""
+    echo -e "  ${CYAN}Nếu muốn cài lại:${NC}"
+    echo "  curl -fsSL ${GITHUB_RAW}/install.sh | sudo bash"
+    echo ""
+
+    # Script tự kết thúc vì đã bị xóa
+    exit 0
+}
+
+cmd_help() {
+    header
+    echo ""
+    echo -e "  ${BOLD}USAGE:${NC}  mybackup [command]"
+    echo ""
+    echo -e "  ${BOLD}COMMANDS:${NC}"
+    printf "    %-20s %s\n" "--run"       "Chạy backup ngay lập tức"
+    printf "    %-20s %s\n" "--status"    "Xem trạng thái + log gần nhất"
+    printf "    %-20s %s\n" "--logs"      "Xem 50 dòng log cuối"
+    printf "    %-20s %s\n" "--cron"      "Xem cronjob hiện tại"
+    printf "    %-20s %s\n" "--update"    "Cập nhật backup.sh từ GitHub"
+    printf "    %-20s %s\n" "--config"    "Chạy lại wizard cấu hình"
+    printf "    %-20s %s\n" "--uninstall" "Gỡ bỏ hoàn toàn"
+    printf "    %-20s %s\n" "--help"      "Hiển thị menu này"
+    echo ""
+    echo -e "  ${BOLD}INSTALL DIR:${NC}  ${INSTALL_DIR}"
+    if [[ -n "${B2_BUCKET:-}" ]]; then
+        echo -e "  ${BOLD}B2 BUCKET:${NC}    ${B2_REMOTE_NAME:-b2}:${B2_BUCKET}/$(hostname)/"
+    fi
+    if [[ -n "${CRON_HOUR:-}" ]]; then
+        echo -e "  ${BOLD}CRONJOB:${NC}      Hàng ngày lúc ${CRON_HOUR}:$(printf '%02d' ${CRON_MINUTE:-30})"
+    fi
+    echo ""
+}
+
+cmd_menu() {
+    header
+    section "Menu"
+    echo ""
+    echo "    1) Chạy backup ngay"
+    echo "    2) Xem trạng thái"
+    echo "    3) Xem logs"
+    echo "    4) Xem cronjob"
+    echo "    5) Cập nhật script"
+    echo "    6) Cấu hình lại"
+    echo "    7) Gỡ cài đặt"
+    echo "    0) Thoát"
+    echo ""
+    echo -ne "  ${BOLD}Chọn [0-7]:${NC} "
+    read -r CHOICE
+    case "${CHOICE}" in
+        1) cmd_run ;;
+        2) cmd_status ;;
+        3) cmd_logs ;;
+        4) cmd_cron ;;
+        5) cmd_update ;;
+        6) cmd_config ;;
+        7) cmd_uninstall ;;
+        0) exit 0 ;;
+        *) err "Lựa chọn không hợp lệ" && exit 1 ;;
+    esac
+}
+
+#==============================================================================
+# ROUTER
+#==============================================================================
+case "${1:-}" in
+    --run)       cmd_run ;;
+    --status)    cmd_status ;;
+    --logs)      cmd_logs ;;
+    --cron)      cmd_cron ;;
+    --update)    cmd_update ;;
+    --config)    cmd_config ;;
+    --uninstall) cmd_uninstall ;;
+    --help|-h)   cmd_help ;;
+    "")          cmd_menu ;;
+    *)
+        err "Lệnh không hợp lệ: $1"
+        echo ""
+        cmd_help
+        exit 1
+        ;;
+esac
