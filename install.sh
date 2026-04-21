@@ -8,22 +8,19 @@
 GITHUB_RAW="https://raw.githubusercontent.com/mrsiu226/backup-mariadb-b2/main"
 INSTALL_DIR="/opt/backup-mariadb-b2"
 
-# Chuyển stdin về /dev/tty ngay lập tức để đọc user input được
-# khi script chạy qua pipe: curl ... | bash
-if [[ -t 0 ]]; then
-    : # stdin đã là terminal
-elif exec < /dev/tty 2>/dev/null; then
-    : # redirect thành công
-else
-    echo ""
-    echo "  ⚠  Không thể mở /dev/tty. Vui lòng chạy theo cách sau:"
-    echo ""
-    echo "  curl -fsSL ${GITHUB_RAW}/install.sh -o /tmp/install.sh && sudo bash /tmp/install.sh"
-    echo ""
-    exit 1
+# Khi chạy qua pipe (curl | bash), stdin là pipe chứ không phải terminal.
+# Giải pháp: tải script về /tmp rồi tự exec lại — lúc đó stdin = terminal thật.
+# Đây là cách đáng tin cậy nhất, hoạt động trên mọi provider (kể cả Contabo).
+if [[ ! -t 0 ]]; then
+    _SELF="/tmp/install-backup-mariadb-$$.sh"
+    curl -fsSL "${GITHUB_RAW}/install.sh" -o "${_SELF}" 2>/dev/null \
+        || { echo "Không thể tải install.sh"; exit 1; }
+    chmod +x "${_SELF}"
+    exec bash "${_SELF}"
+    # exec thay thế process hiện tại → dòng dưới không bao giờ chạy
 fi
 
-# Bật strict mode SAU khi đã xử lý tty (tránh set -e bắt lỗi exec)
+# Tới đây stdin đã là terminal thật
 set -euo pipefail
 
 
