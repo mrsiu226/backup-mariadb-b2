@@ -1,220 +1,340 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #==============================================================================
-# install.sh — Setup MariaDB B2 Backup trên server mới
-# Chạy 1 lần duy nhất: sudo bash install.sh
+# MariaDB → Backblaze B2 | One-line Installer
+# Usage: curl -fsSL https://raw.githubusercontent.com/mrsiu226/backup-mariadb-b2/main/install.sh | sudo bash
 #==============================================================================
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONFIG_FILE="${SCRIPT_DIR}/config.env"
+# --- Config ------------------------------------------------------------------
+GITHUB_RAW="https://raw.githubusercontent.com/mrsiu226/backup-mariadb-b2/main"
+INSTALL_DIR="/opt/backup-mariadb-b2"
 
-#--- Colors -------------------------------------------------------------------
+# --- Colors ------------------------------------------------------------------
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 BLUE='\033[0;34m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
-log_info()    { echo -e "${BLUE}[INFO]${NC}  $1"; }
-log_ok()      { echo -e "${GREEN}[OK]${NC}    $1"; }
-log_warn()    { echo -e "${YELLOW}[WARN]${NC}  $1"; }
-log_error()   { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
-log_section() { echo -e "\n${BOLD}${CYAN}==== $1 ====${NC}"; }
+log_ok()      { echo -e "${GREEN}  ✔${NC}  $1"; }
+log_info()    { echo -e "${BLUE}  →${NC}  $1"; }
+log_warn()    { echo -e "${YELLOW}  ⚠${NC}  $1"; }
+log_error()   { echo -e "${RED}  ✘  ERROR: $1${NC}"; exit 1; }
+log_section() { echo -e "\n${BOLD}${CYAN}━━━ $1 ━━━${NC}"; }
+
+# Đọc input từ /dev/tty (hoạt động cả khi pipe từ curl)
+ask() {
+    local prompt="$1" default="${2:-}" var_name="$3"
+    local input
+    if [[ -n "${default}" ]]; then
+        echo -ne "${BOLD}  ${prompt}${NC} ${CYAN}[${default}]${NC}: " > /dev/tty
+    else
+        echo -ne "${BOLD}  ${prompt}${NC}: " > /dev/tty
+    fi
+    read -r input < /dev/tty
+    input="${input:-${default}}"
+    printf -v "${var_name}" '%s' "${input}"
+}
+
+ask_secret() {
+    local prompt="$1" var_name="$2"
+    local input
+    echo -ne "${BOLD}  ${prompt}${NC}: " > /dev/tty
+    read -rs input < /dev/tty
+    echo "" > /dev/tty
+    printf -v "${var_name}" '%s' "${input}"
+}
+
+ask_yn() {
+    local prompt="$1" default="${2:-y}" var_name="$3"
+    local input
+    if [[ "${default}" == "y" ]]; then
+        echo -ne "${BOLD}  ${prompt}${NC} ${CYAN}[Y/n]${NC}: " > /dev/tty
+    else
+        echo -ne "${BOLD}  ${prompt}${NC} ${CYAN}[y/N]${NC}: " > /dev/tty
+    fi
+    read -r input < /dev/tty
+    input="${input:-${default}}"
+    printf -v "${var_name}" '%s' "${input,,}"
+}
 
 #==============================================================================
 # BANNER
 #==============================================================================
+clear 2>/dev/null || true
 echo -e "${BOLD}${CYAN}"
-cat << 'EOF'
-  ____             _                   __  __           _       ____  ____
- | __ )  __ _  ___| | ___   _ _ __   |  \/  | __ _ _ _(_) __ _|  _ \| __ )
- |  _ \ / _` |/ __| |/ / | | | '_ \  | |\/| |/ _` | '__| |/ _` | | | |  _ \
- | |_) | (_| | (__|   <| |_| | |_) | | |  | | (_| | |  | | (_| | |_| | |_) |
- |____/ \__,_|\___|_|\_\\__,_| .__/  |_|  |_|\__,_|_|  |_|\__,_|____/|____/
-                               |_|
-EOF
+cat << 'BANNER'
+  ╔══════════════════════════════════════════════════════╗
+  ║     MariaDB → Backblaze B2   Auto Backup Setup      ║
+  ║          github.com/mrsiu226/backup-mariadb-b2       ║
+  ╚══════════════════════════════════════════════════════╝
+BANNER
 echo -e "${NC}"
-echo -e "  MariaDB → Backblaze B2 Backup Installer"
-echo -e "  Hostname: $(hostname) | Date: $(date '+%Y-%m-%d %H:%M:%S')\n"
+echo -e "  Hostname : ${BOLD}$(hostname)${NC}"
+echo -e "  Date     : $(date '+%Y-%m-%d %H:%M:%S')"
+echo ""
 
 #==============================================================================
-# STEP 1: Load config.env
+# STEP 1: COLLECT CONFIG (Interactive)
 #==============================================================================
-log_section "Step 1: Load Config"
+log_section "Bước 1/6 — Cấu hình Backblaze B2"
+echo -e "  ${YELLOW}Lấy thông tin tại: https://secure.backblaze.com/app_keys.htm${NC}\n"
 
-if [[ ! -f "${CONFIG_FILE}" ]]; then
-    log_warn "config.env not found. Creating from template..."
-    cp "${SCRIPT_DIR}/config.example.env" "${CONFIG_FILE}"
-    log_error "Please edit ${CONFIG_FILE} with your credentials then re-run install.sh"
+ask "B2 Account ID (Application Key ID)" "" B2_ACCOUNT_ID
+ask "B2 Application Key" "" B2_APPLICATION_KEY
+ask "B2 Bucket name" "mariadb-backups" B2_BUCKET
+ask "B2 Remote name (tên trong rclone)" "b2" B2_REMOTE_NAME
+
+[[ -z "${B2_ACCOUNT_ID}" ]]    && log_error "B2 Account ID không được để trống"
+[[ -z "${B2_APPLICATION_KEY}" ]] && log_error "B2 Application Key không được để trống"
+
+log_section "Bước 2/6 — Cấu hình MariaDB"
+echo -e "  ${YELLOW}Tạo user backup riêng (KHÔNG dùng root)${NC}\n"
+
+ask "Tên user backup MariaDB" "backup_user" MYSQL_BACKUP_USER
+ask_secret "Password cho user '${MYSQL_BACKUP_USER}'" MYSQL_BACKUP_PASSWORD
+ask "MySQL host" "localhost" MYSQL_HOST
+
+[[ -z "${MYSQL_BACKUP_PASSWORD}" ]] && log_error "Password không được để trống"
+
+# Confirm password
+ask_secret "Nhập lại password để xác nhận" MYSQL_BACKUP_PASSWORD_CONFIRM
+[[ "${MYSQL_BACKUP_PASSWORD}" != "${MYSQL_BACKUP_PASSWORD_CONFIRM}" ]] \
+    && log_error "Password không khớp. Chạy lại installer."
+
+log_section "Bước 3/6 — Cấu hình Backup"
+
+ask "Giữ backup local bao nhiêu ngày" "3" LOCAL_RETENTION_DAYS
+ask "Giữ backup trên B2 bao nhiêu ngày" "30" B2_RETENTION_DAYS
+ask "Databases loại trừ khi backup" "information_schema performance_schema sys mysql" EXCLUDE_DBS
+
+log_section "Bước 4/6 — Cấu hình Cronjob"
+
+ask "Giờ chạy backup (0-23)" "2" CRON_HOUR
+ask "Phút chạy backup (0-59)" "30" CRON_MINUTE
+echo -e "  ${CYAN}→ Backup sẽ chạy lúc ${CRON_HOUR}:$(printf '%02d' ${CRON_MINUTE}) mỗi ngày${NC}"
+
+log_section "Bước 5/6 — Telegram Notification (tùy chọn)"
+
+ask_yn "Bạn có muốn nhận thông báo Telegram không?" "n" USE_TELEGRAM
+
+TELEGRAM_BOT_TOKEN=""
+TELEGRAM_CHAT_ID=""
+if [[ "${USE_TELEGRAM}" == "y" ]]; then
+    ask "Telegram Bot Token" "" TELEGRAM_BOT_TOKEN
+    ask "Telegram Chat ID" "" TELEGRAM_CHAT_ID
 fi
 
-# shellcheck source=config.env
-source "${CONFIG_FILE}"
+#==============================================================================
+# CONFIRM
+#==============================================================================
+echo ""
+echo -e "${BOLD}${CYAN}━━━ Xác nhận cấu hình ━━━${NC}"
+echo ""
+echo -e "  ${BOLD}B2 Bucket     :${NC} ${B2_BUCKET}"
+echo -e "  ${BOLD}B2 Remote     :${NC} ${B2_REMOTE_NAME}"
+echo -e "  ${BOLD}MySQL User    :${NC} ${MYSQL_BACKUP_USER}@${MYSQL_HOST}"
+echo -e "  ${BOLD}Exclude DBs   :${NC} ${EXCLUDE_DBS}"
+echo -e "  ${BOLD}Local keep    :${NC} ${LOCAL_RETENTION_DAYS} ngày"
+echo -e "  ${BOLD}B2 keep       :${NC} ${B2_RETENTION_DAYS} ngày"
+echo -e "  ${BOLD}Cronjob       :${NC} ${CRON_HOUR}:$(printf '%02d' ${CRON_MINUTE}) hàng ngày"
+echo -e "  ${BOLD}Telegram      :${NC} ${USE_TELEGRAM}"
+echo -e "  ${BOLD}Install dir   :${NC} ${INSTALL_DIR}"
+echo ""
 
-# Validate required fields
-for VAR in B2_ACCOUNT_ID B2_APPLICATION_KEY B2_BUCKET B2_REMOTE_NAME \
-           MYSQL_BACKUP_USER MYSQL_BACKUP_PASSWORD; do
-    VALUE="${!VAR:-}"
-    if [[ -z "${VALUE}" || "${VALUE}" == *"CHANGE_ME"* || "${VALUE}" == *"your_"* ]]; then
-        log_error "${VAR} is not set in config.env. Please fill it in."
-    fi
-done
-
-log_ok "Config loaded from ${CONFIG_FILE}"
+ask_yn "Tiến hành cài đặt?" "y" CONFIRM
+[[ "${CONFIRM}" != "y" ]] && echo "Đã hủy." && exit 0
 
 #==============================================================================
-# STEP 2: Check dependencies
+# STEP 2: INSTALL DEPENDENCIES
 #==============================================================================
-log_section "Step 2: Check Dependencies"
+log_section "Bước 6/6 — Cài đặt"
 
-install_if_missing() {
+log_info "Cập nhật package list..."
+apt-get update -qq > /dev/null 2>&1 || true
+
+install_pkg() {
     local cmd="$1" pkg="${2:-$1}"
     if ! command -v "${cmd}" > /dev/null 2>&1; then
-        log_info "Installing ${pkg}..."
-        apt-get install -y "${pkg}" > /dev/null 2>&1 && log_ok "${pkg} installed" \
-            || log_error "Failed to install ${pkg}"
+        log_info "Đang cài ${pkg}..."
+        apt-get install -y -qq "${pkg}" > /dev/null 2>&1 \
+            && log_ok "${pkg} đã cài" \
+            || log_error "Không thể cài ${pkg}"
     else
-        log_ok "${cmd} already installed"
+        log_ok "${cmd} đã có sẵn"
     fi
 }
 
-install_if_missing mysql     mariadb-client
-install_if_missing mysqldump mariadb-client
-install_if_missing gzip      gzip
-install_if_missing bc        bc
-install_if_missing curl      curl
+install_pkg mysql     mariadb-client
+install_pkg gzip      gzip
+install_pkg bc        bc
+install_pkg curl      curl
 
-# Install rclone if missing
+# rclone
 if ! command -v rclone > /dev/null 2>&1; then
-    log_info "Installing rclone..."
-    curl -fsSL https://rclone.org/install.sh | bash > /dev/null 2>&1
-    log_ok "rclone installed"
+    log_info "Đang cài rclone..."
+    curl -fsSL https://rclone.org/install.sh | bash > /dev/null 2>&1 \
+        && log_ok "rclone đã cài" \
+        || log_error "Không thể cài rclone"
 else
-    log_ok "rclone already installed ($(rclone version --no-check-update 2>/dev/null | head -1))"
+    log_ok "rclone đã có sẵn"
 fi
 
 #==============================================================================
-# STEP 3: Configure rclone for B2
+# SETUP RCLONE B2
 #==============================================================================
-log_section "Step 3: Configure Rclone → B2"
-
-RCLONE_CONFIG_DIR="${HOME}/.config/rclone"
-RCLONE_CONFIG_FILE="${RCLONE_CONFIG_DIR}/rclone.conf"
-mkdir -p "${RCLONE_CONFIG_DIR}"
+RCLONE_CONF="${HOME}/.config/rclone/rclone.conf"
+mkdir -p "$(dirname "${RCLONE_CONF}")"
 
 if rclone listremotes 2>/dev/null | grep -q "^${B2_REMOTE_NAME}:"; then
-    log_warn "rclone remote '${B2_REMOTE_NAME}' already exists — skipping"
+    log_warn "rclone remote '${B2_REMOTE_NAME}' đã tồn tại — bỏ qua"
 else
-    log_info "Creating rclone remote '${B2_REMOTE_NAME}'..."
-    cat >> "${RCLONE_CONFIG_FILE}" << EOF
+    log_info "Tạo rclone remote '${B2_REMOTE_NAME}'..."
+    cat >> "${RCLONE_CONF}" << EOF
 
 [${B2_REMOTE_NAME}]
 type = b2
 account = ${B2_ACCOUNT_ID}
 key = ${B2_APPLICATION_KEY}
 EOF
-    log_ok "rclone remote '${B2_REMOTE_NAME}' created"
+    log_ok "rclone remote '${B2_REMOTE_NAME}' đã tạo"
 fi
 
-# Test connection
-log_info "Testing B2 connection..."
+log_info "Kiểm tra kết nối B2..."
 rclone mkdir "${B2_REMOTE_NAME}:${B2_BUCKET}" > /dev/null 2>&1 \
-    && log_ok "B2 bucket '${B2_BUCKET}' accessible" \
-    || log_error "Cannot connect to B2. Check B2_ACCOUNT_ID and B2_APPLICATION_KEY."
+    && log_ok "Kết nối B2 OK — bucket '${B2_BUCKET}'" \
+    || log_error "Không thể kết nối B2. Kiểm tra lại Account ID và Application Key."
 
 #==============================================================================
-# STEP 4: Create MariaDB backup user
+# SETUP MARIADB USER
 #==============================================================================
-log_section "Step 4: Setup MariaDB Backup User"
+log_info "Tạo MariaDB user '${MYSQL_BACKUP_USER}'..."
 
-# Kiểm tra user đã tồn tại chưa
 USER_EXISTS=$(mysql -u root -N -e \
     "SELECT COUNT(*) FROM mysql.user WHERE user='${MYSQL_BACKUP_USER}' AND host='localhost';" \
     2>/dev/null || echo "0")
 
 if [[ "${USER_EXISTS}" -gt 0 ]]; then
-    log_warn "User '${MYSQL_BACKUP_USER}'@'localhost' already exists — updating password..."
+    log_warn "User đã tồn tại — cập nhật password..."
     mysql -u root -e "
         ALTER USER '${MYSQL_BACKUP_USER}'@'localhost' IDENTIFIED BY '${MYSQL_BACKUP_PASSWORD}';
         FLUSH PRIVILEGES;
-    " 2>/dev/null || log_warn "Could not update user (may need root password)"
+    " 2>/dev/null
 else
-    log_info "Creating MariaDB user '${MYSQL_BACKUP_USER}'..."
     mysql -u root -e "
         CREATE USER '${MYSQL_BACKUP_USER}'@'localhost' IDENTIFIED BY '${MYSQL_BACKUP_PASSWORD}';
         GRANT SELECT, SHOW DATABASES, LOCK TABLES, RELOAD,
               REPLICATION CLIENT, EVENT, TRIGGER, SHOW VIEW
         ON *.* TO '${MYSQL_BACKUP_USER}'@'localhost';
         FLUSH PRIVILEGES;
-    " 2>/dev/null && log_ok "User '${MYSQL_BACKUP_USER}'@'localhost' created" \
-        || log_error "Failed to create MariaDB user. Ensure you can login as root without password."
+    " 2>/dev/null && log_ok "User '${MYSQL_BACKUP_USER}' đã tạo" \
+        || log_error "Không thể tạo user MariaDB"
 fi
 
 #==============================================================================
-# STEP 5: Create .my.cnf
+# DOWNLOAD BACKUP.SH
 #==============================================================================
-log_section "Step 5: Create .my.cnf"
+log_info "Tạo thư mục ${INSTALL_DIR}..."
+mkdir -p "${INSTALL_DIR}"
 
-MY_CNF="${SCRIPT_DIR}/.my.cnf"
-cat > "${MY_CNF}" << EOF
+log_info "Tải backup.sh từ GitHub..."
+curl -fsSL "${GITHUB_RAW}/backup.sh" -o "${INSTALL_DIR}/backup.sh" \
+    && log_ok "backup.sh đã tải" \
+    || log_error "Không thể tải backup.sh từ GitHub"
+chmod +x "${INSTALL_DIR}/backup.sh"
+
+#==============================================================================
+# CREATE CONFIG FILES
+#==============================================================================
+log_info "Tạo config.env..."
+cat > "${INSTALL_DIR}/config.env" << EOF
+# Được tạo tự động bởi installer | $(date '+%Y-%m-%d %H:%M:%S')
+# Hostname: $(hostname)
+
+B2_ACCOUNT_ID="${B2_ACCOUNT_ID}"
+B2_APPLICATION_KEY="${B2_APPLICATION_KEY}"
+B2_BUCKET="${B2_BUCKET}"
+B2_REMOTE_NAME="${B2_REMOTE_NAME}"
+
+MYSQL_BACKUP_USER="${MYSQL_BACKUP_USER}"
+MYSQL_BACKUP_PASSWORD="${MYSQL_BACKUP_PASSWORD}"
+MYSQL_HOST="${MYSQL_HOST}"
+
+BACKUP_DIR="/root/backups/mariadb"
+EXCLUDE_DBS="${EXCLUDE_DBS}"
+LOCAL_RETENTION_DAYS=${LOCAL_RETENTION_DAYS}
+B2_RETENTION_DAYS=${B2_RETENTION_DAYS}
+
+CRON_MINUTE=${CRON_MINUTE}
+CRON_HOUR=${CRON_HOUR}
+
+LOG_DIR="/root/logs"
+
+TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN}"
+TELEGRAM_CHAT_ID="${TELEGRAM_CHAT_ID}"
+EOF
+chmod 600 "${INSTALL_DIR}/config.env"
+log_ok "config.env đã tạo (chmod 600)"
+
+log_info "Tạo .my.cnf..."
+cat > "${INSTALL_DIR}/.my.cnf" << EOF
 [client]
 user=${MYSQL_BACKUP_USER}
 password=${MYSQL_BACKUP_PASSWORD}
-host=${MYSQL_HOST:-localhost}
+host=${MYSQL_HOST}
 
 [mysqldump]
 user=${MYSQL_BACKUP_USER}
 password=${MYSQL_BACKUP_PASSWORD}
-host=${MYSQL_HOST:-localhost}
+host=${MYSQL_HOST}
 EOF
-chmod 600 "${MY_CNF}"
-log_ok ".my.cnf created at ${MY_CNF}"
+chmod 600 "${INSTALL_DIR}/.my.cnf"
+log_ok ".my.cnf đã tạo (chmod 600)"
 
 # Test connection
-mysql --defaults-file="${MY_CNF}" -e "SELECT 1;" > /dev/null 2>&1 \
-    && log_ok "MariaDB connection test passed" \
-    || log_error "Cannot connect with backup_user. Check credentials."
+mysql --defaults-file="${INSTALL_DIR}/.my.cnf" -e "SELECT 1;" > /dev/null 2>&1 \
+    && log_ok "Kết nối MariaDB OK" \
+    || log_error "Không thể kết nối MariaDB với user '${MYSQL_BACKUP_USER}'"
 
 #==============================================================================
-# STEP 6: Create directories
+# CREATE DIRECTORIES
 #==============================================================================
-log_section "Step 6: Create Directories"
-
-mkdir -p "${BACKUP_DIR}" "${LOG_DIR}"
-log_ok "Backup dir : ${BACKUP_DIR}"
-log_ok "Log dir    : ${LOG_DIR}"
+mkdir -p "/root/backups/mariadb" "/root/logs"
+log_ok "Thư mục backup và log đã tạo"
 
 #==============================================================================
-# STEP 7: Chmod scripts
+# SETUP CRONJOB
 #==============================================================================
-log_section "Step 7: Set Permissions"
-
-chmod +x "${SCRIPT_DIR}/backup.sh"
-log_ok "backup.sh is executable"
-
-#==============================================================================
-# STEP 8: Install cronjob
-#==============================================================================
-log_section "Step 8: Setup Cronjob"
-
-CRON_CMD="${CRON_MINUTE:-30} ${CRON_HOUR:-2} * * * /bin/bash ${SCRIPT_DIR}/backup.sh >> ${LOG_DIR}/backup_cron.log 2>&1"
+CRON_CMD="${CRON_MINUTE} ${CRON_HOUR} * * * /bin/bash ${INSTALL_DIR}/backup.sh >> /root/logs/backup_cron.log 2>&1"
 CRON_MARKER="backup-mariadb-b2"
 
-# Xóa cronjob cũ nếu có, thêm mới
 ( crontab -l 2>/dev/null | grep -v "${CRON_MARKER}" ; \
   echo "# ${CRON_MARKER}" ; \
   echo "${CRON_CMD}" ) | crontab -
+log_ok "Cronjob đã thêm: chạy lúc ${CRON_HOUR}:$(printf '%02d' ${CRON_MINUTE}) mỗi ngày"
 
-log_ok "Cronjob added: runs daily at ${CRON_HOUR:-2}:$(printf '%02d' ${CRON_MINUTE:-30})"
+#==============================================================================
+# TEST RUN
+#==============================================================================
+ask_yn "Chạy thử backup ngay bây giờ?" "y" RUN_NOW
+if [[ "${RUN_NOW}" == "y" ]]; then
+    echo ""
+    log_info "Đang chạy backup (có thể mất vài phút)..."
+    bash "${INSTALL_DIR}/backup.sh" && log_ok "Backup thử nghiệm thành công!" \
+        || log_warn "Backup có lỗi, kiểm tra log tại /root/logs/"
+fi
 
 #==============================================================================
 # DONE
 #==============================================================================
 echo ""
-echo -e "${BOLD}${GREEN}============================================${NC}"
-echo -e "${BOLD}${GREEN}  ✅ Installation complete!${NC}"
-echo -e "${BOLD}${GREEN}============================================${NC}"
+echo -e "${BOLD}${GREEN}  ╔══════════════════════════════════════════╗${NC}"
+echo -e "${BOLD}${GREEN}  ║        ✅  Cài đặt hoàn tất!            ║${NC}"
+echo -e "${BOLD}${GREEN}  ╚══════════════════════════════════════════╝${NC}"
 echo ""
-echo -e "  ${BOLD}Test run:${NC}    bash ${SCRIPT_DIR}/backup.sh"
-echo -e "  ${BOLD}Logs:${NC}        ${LOG_DIR}/backup_mariadb_\$(date +%Y%m%d).log"
-echo -e "  ${BOLD}B2 bucket:${NC}   ${B2_REMOTE_NAME}:${B2_BUCKET}/$(hostname)/"
-echo -e "  ${BOLD}Cronjob:${NC}     daily at ${CRON_HOUR:-2}:$(printf '%02d' ${CRON_MINUTE:-30}) AM"
+echo -e "  ${BOLD}Install dir :${NC}  ${INSTALL_DIR}"
+echo -e "  ${BOLD}Config      :${NC}  ${INSTALL_DIR}/config.env"
+echo -e "  ${BOLD}Logs        :${NC}  /root/logs/backup_mariadb_YYYYMMDD.log"
+echo -e "  ${BOLD}B2 bucket   :${NC}  ${B2_REMOTE_NAME}:${B2_BUCKET}/$(hostname)/"
+echo -e "  ${BOLD}Cronjob     :${NC}  Hàng ngày lúc ${CRON_HOUR}:$(printf '%02d' ${CRON_MINUTE}) AM"
+echo ""
+echo -e "  ${CYAN}Chạy thủ công:  bash ${INSTALL_DIR}/backup.sh${NC}"
 echo ""
