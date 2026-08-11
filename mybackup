@@ -279,7 +279,7 @@ EOF
     fi
 
     info "Kiểm tra kết nối B2..."
-    rclone mkdir "${B2_REMOTE_NAME}:${B2_BUCKET}" > /dev/null 2>&1 \
+    rclone lsd "${B2_REMOTE_NAME}:" > /dev/null 2>&1 \
         && ok "Kết nối B2 OK — bucket '${B2_BUCKET}'" \
         || { err "Không thể kết nối B2. Kiểm tra Account ID và Application Key."; exit 1; }
 
