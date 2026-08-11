@@ -122,10 +122,18 @@ log "🔎 Phát hiện ${#SITES[@]} website"
 
 #==============================================================================
 # BUILD ZIP EXCLUDE PATTERNS
+# - Thư mục (không chứa *): loại trừ cả dir lẫn nội dung bên trong
+# - File glob (chứa *): chỉ match file, không thêm hậu tố /*
 #==============================================================================
 ZIP_EXCLUDES=()
 for PATTERN in ${SOURCE_EXCLUDE_PATTERNS}; do
-    ZIP_EXCLUDES+=("*/${PATTERN}" "*/${PATTERN}/*")
+    if [[ "${PATTERN}" == *"*"* ]]; then
+        # File glob pattern (e.g. *.log, *.webm) — match mọi cấp thư mục
+        ZIP_EXCLUDES+=("*/${PATTERN}" "${PATTERN}")
+    else
+        # Thư mục — loại trừ chính thư mục và toàn bộ nội dung bên trong
+        ZIP_EXCLUDES+=("*/${PATTERN}/" "*/${PATTERN}/*" "${PATTERN}/" "${PATTERN}/*")
+    fi
 done
 
 #==============================================================================
@@ -157,7 +165,8 @@ for ENTRY in "${SITES[@]:-}"; do
     SITE_PARENT="$(dirname "${SITE_PATH}")"
     SITE_BASENAME="$(basename "${SITE_PATH}")"
 
-    if (cd "${SITE_PARENT}" && zip -r -q -X "${ZIP_FILE}" "${SITE_BASENAME}" -x "${ZIP_EXCLUDES[@]}") >> "${LOG_FILE}" 2>&1; then
+    # -y: store symlinks as-is (không follow) → tránh symlink vòng lặp gây file khổng lồ
+    if (cd "${SITE_PARENT}" && zip -r -q -X -y "${ZIP_FILE}" "${SITE_BASENAME}" -x "${ZIP_EXCLUDES[@]}") >> "${LOG_FILE}" 2>&1; then
         FILE_SIZE=$(stat -c%s "${ZIP_FILE}" 2>/dev/null || echo 0)
         FILE_SIZE_MB=$(echo "scale=2; ${FILE_SIZE}/1024/1024" | bc)
         TOTAL_SIZE=$((TOTAL_SIZE + FILE_SIZE))

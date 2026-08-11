@@ -101,7 +101,7 @@ cmd_setup() {
     local _DEF_CRON_HOUR="2" _DEF_CRON_MIN="30"
     local _DEF_TG_TOKEN="" _DEF_TG_CHAT=""
     local _DEF_ENABLE_SRC="n" _DEF_SRC_EXCLUDE_DOMAINS=""
-    local _DEF_SRC_PATTERNS="node_modules .git .svn cache tmp logs *.log storage/framework/cache storage/logs wp-content/cache wp-content/uploads/cache"
+    local _DEF_SRC_PATTERNS="vendor node_modules .git .svn .cache tmp *.log storage/framework/cache storage/framework/sessions storage/framework/views storage/logs storage/debugbar wp-content/cache wp-content/uploads/cache downloads *.webm *.mp4 *.mkv *.avi *.mov *.flv *.zip *.tar *.tar.gz *.tar.bz2 *.sql"
     local _DEF_SRC_LOCAL_DAYS="3" _DEF_SRC_B2_DAYS="14"
 
     if [[ -f "${CONFIG_FILE}" ]]; then
