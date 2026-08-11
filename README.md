@@ -28,8 +28,9 @@ Wizard sẽ hỏi từng bước:
 | 1 | Backblaze B2 (Account ID, Application Key, Bucket) |
 | 2 | MariaDB user backup + password |
 | 3 | Retention days (local + B2) |
-| 4 | Lịch cronjob |
-| 5 | Telegram notification (tùy chọn) |
+| 4 | Backup source code website (tùy chọn, xem [bên dưới](#-backup-source-code-website-hostvn)) |
+| 5 | Lịch cronjob |
+| 6 | Telegram notification (tùy chọn) |
 
 > **Auto-detect:** Nếu server đã có rclone B2 hoặc config cũ, wizard tự điền sẵn — chỉ cần nhấn Enter.
 >
@@ -49,11 +50,12 @@ mybackup                  # Interactive menu (chọn 1-7)
 
 ```bash
 sudo mybackup --setup     # Wizard cấu hình (lần đầu hoặc thay đổi)
-mybackup --run            # Chạy backup ngay lập tức
+mybackup --run            # Chạy backup database ngay (+ source nếu bật)
+mybackup --run-source     # Chạy backup source code ngay
 mybackup --status         # Trạng thái + log gần nhất + B2 file count
 mybackup --logs           # Xem 50 dòng log cuối
 mybackup --cron           # Xem cronjob hiện tại
-mybackup --update         # Cập nhật backup.sh + mybackup từ GitHub
+mybackup --update         # Cập nhật scripts từ GitHub
 sudo mybackup --uninstall # Gỡ bỏ hoàn toàn
 mybackup --help           # Hiển thị help
 ```
@@ -92,12 +94,71 @@ Sẽ **giữ lại**: backup files, logs, MariaDB user, rclone config
 |-----------|----------|
 | 📦 Backup | Từng database riêng + 1 file all-in-one |
 | 🗜️ Nén | gzip cấp 9 |
+| 📁 Source code | Backup source website (HostVN), zip theo domain — [chi tiết](#-backup-source-code-website-hostvn) |
 | ☁️ Upload | Backblaze B2 qua rclone |
 | ✅ Verify | Kiểm tra số file sau upload |
-| 🧹 Cleanup | Tự dọn local + B2 theo retention days |
+| 🧹 Cleanup | Tự dọn local + B2 theo retention days (riêng cho DB và source) |
 | 🔔 Notify | Telegram notification (tùy chọn) |
 | 🔒 Bảo mật | User backup riêng, credentials chmod 600 |
 | 🖥️ CLI | `mybackup` command quản lý từ anywhere |
+
+---
+
+## 📁 Backup source code website (HostVN)
+
+Tự động phát hiện toàn bộ website chạy trên server thông qua config của **HostVN**, hỗ trợ cả 2 phiên bản:
+
+| Phiên bản | Vị trí config | Source lấy từ |
+|-----------|---------------|----------------|
+| Cũ  | `/var/hostvn/users/.<domain>.conf` | `public_html=` |
+| Mới | `/var/hostvn/data/websites/<domain>/.settings.conf` | `base_dir=` + `/public_html` |
+
+Script tự nhận diện phiên bản đang dùng (kiểm tra cả 2 thư mục, ưu tiên bản mới nếu domain trùng), zip từng site rồi upload B2 — **không cần khai báo danh sách domain thủ công**.
+
+### Bật tính năng
+
+```bash
+sudo mybackup --setup
+# → Bước 4/6: chọn "y" cho "Bật backup source code website?"
+```
+
+Hoặc bật trực tiếp trong `config.env`:
+
+```bash
+ENABLE_SOURCE_BACKUP="yes"
+```
+
+Khi bật, `backup.sh` sẽ tự động chạy `backup_source.sh` nối tiếp sau backup database (dùng chung 1 cronjob). Có thể chạy riêng bằng `mybackup --run-source`.
+
+### Loại trừ file/thư mục khi zip
+
+Mặc định loại trừ các thư mục rác không cần thiết:
+
+```
+node_modules .git .svn cache tmp logs *.log
+storage/framework/cache storage/logs
+wp-content/cache wp-content/uploads/cache
+```
+
+Chỉnh sửa qua biến `SOURCE_EXCLUDE_PATTERNS` trong `config.env` (cách nhau bởi khoảng trắng). Loại trừ hẳn 1 domain không muốn backup qua `SOURCE_EXCLUDE_DOMAINS`.
+
+### Cấu trúc backup source trên B2
+
+```
+your-bucket/
+└── server-hostname/
+    └── source/
+        └── 2026-04-21/
+            ├── domain1.com_20260421_023012.zip
+            └── domain2.com_20260421_023015.zip
+```
+
+### Restore source code
+
+```bash
+rclone copy b2:your-bucket/hostname/source/2026-04-21/domain1.com.zip ./
+unzip domain1.com.zip -d /home/user/domain1.com/
+```
 
 ---
 
@@ -105,10 +166,11 @@ Sẽ **giữ lại**: backup files, logs, MariaDB user, rclone config
 
 ```
 /opt/backup-mariadb-b2/
-├── backup.sh        # Script backup chính
-├── mybackup         # CLI tool
-├── config.env       # Config + credentials (chmod 600)
-└── .my.cnf          # MySQL credentials (chmod 600)
+├── backup.sh          # Script backup database
+├── backup_source.sh   # Script backup source code (HostVN)
+├── mybackup           # CLI tool
+├── config.env         # Config + credentials (chmod 600)
+└── .my.cnf             # MySQL credentials (chmod 600)
 
 /usr/local/bin/mybackup  → symlink tới trên
 
@@ -117,8 +179,13 @@ Sẽ **giữ lại**: backup files, logs, MariaDB user, rclone config
     ├── database1_YYYYMMDD_HHMMSS.sql.gz
     └── all_databases_YYYYMMDD_HHMMSS.sql.gz
 
+/root/backups/source/
+└── YYYY-MM-DD/
+    └── domain1.com_YYYYMMDD_HHMMSS.zip
+
 /root/logs/
 ├── backup_mariadb_YYYYMMDD.log
+├── backup_source_YYYYMMDD.log
 └── backup_cron.log
 ```
 
@@ -165,4 +232,5 @@ curl -fsSL https://raw.githubusercontent.com/mrsiu226/backup-mariadb-b2/main/bac
 - Ubuntu 20.04+ / Debian 10+
 - MariaDB 10.3+
 - Quyền `root` (để tạo user MariaDB và cài packages)
+- (Tùy chọn) Server dùng HostVN — để backup source code, cần quyền đọc `/var/hostvn/` và `/home/`
 - Kết nối internet

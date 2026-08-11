@@ -64,6 +64,7 @@ install_pkg() {
 
 install_pkg mysql mariadb-client
 install_pkg gzip  gzip
+install_pkg zip   zip
 install_pkg bc    bc
 install_pkg curl  curl
 
@@ -91,6 +92,12 @@ curl -fsSL "${GITHUB_RAW}/backup.sh" -o "${INSTALL_DIR}/backup.sh" \
     && log_ok "backup.sh đã tải" \
     || log_error "Không thể tải backup.sh"
 
+log_info "Tải backup_source.sh..."
+curl -fsSL "${GITHUB_RAW}/backup_source.sh" -o "${INSTALL_DIR}/backup_source.sh" \
+    && chmod +x "${INSTALL_DIR}/backup_source.sh" \
+    && log_ok "backup_source.sh đã tải" \
+    || log_error "Không thể tải backup_source.sh"
+
 log_info "Tải mybackup CLI..."
 curl -fsSL "${GITHUB_RAW}/mybackup" -o "${INSTALL_DIR}/mybackup" \
     && chmod +x "${INSTALL_DIR}/mybackup" \
@@ -100,7 +107,7 @@ curl -fsSL "${GITHUB_RAW}/mybackup" -o "${INSTALL_DIR}/mybackup" \
 ln -sf "${INSTALL_DIR}/mybackup" /usr/local/bin/mybackup
 log_ok "mybackup symlink → /usr/local/bin/mybackup"
 
-mkdir -p "/root/backups/mariadb" "/root/logs"
+mkdir -p "/root/backups/mariadb" "/root/backups/source" "/root/logs"
 log_ok "Thư mục backup & log đã tạo"
 
 #==============================================================================

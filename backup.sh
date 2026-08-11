@@ -216,4 +216,17 @@ NOTIFY_MSG="✅ <b>[${HOSTNAME}] DB Backup OK</b>
 ⚠️ Failed:${FAILED_DBS}"
 
 send_telegram "${NOTIFY_MSG}"
+
+#==============================================================================
+# SOURCE CODE BACKUP (tùy chọn — HostVN websites)
+#==============================================================================
+if [[ "${ENABLE_SOURCE_BACKUP:-no}" == "yes" ]]; then
+    if [[ -f "${SCRIPT_DIR}/backup_source.sh" ]]; then
+        log "🚀 Bắt đầu backup source code website..."
+        bash "${SCRIPT_DIR}/backup_source.sh" || log "❌ Source code backup thất bại — xem log riêng"
+    else
+        log "⚠️  ENABLE_SOURCE_BACKUP=yes nhưng không tìm thấy backup_source.sh"
+    fi
+fi
+
 exit 0

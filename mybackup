@@ -100,6 +100,9 @@ cmd_setup() {
     local _DEF_EXCLUDE="information_schema performance_schema sys mysql"
     local _DEF_CRON_HOUR="2" _DEF_CRON_MIN="30"
     local _DEF_TG_TOKEN="" _DEF_TG_CHAT=""
+    local _DEF_ENABLE_SRC="n" _DEF_SRC_EXCLUDE_DOMAINS=""
+    local _DEF_SRC_PATTERNS="node_modules .git .svn cache tmp logs *.log storage/framework/cache storage/logs wp-content/cache wp-content/uploads/cache"
+    local _DEF_SRC_LOCAL_DAYS="3" _DEF_SRC_B2_DAYS="14"
 
     if [[ -f "${CONFIG_FILE}" ]]; then
         _DEF_B2_ACCOUNT="${B2_ACCOUNT_ID:-}"
@@ -116,6 +119,11 @@ cmd_setup() {
         _DEF_CRON_MIN="${CRON_MINUTE:-30}"
         _DEF_TG_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
         _DEF_TG_CHAT="${TELEGRAM_CHAT_ID:-}"
+        [[ "${ENABLE_SOURCE_BACKUP:-no}" == "yes" ]] && _DEF_ENABLE_SRC="y"
+        _DEF_SRC_EXCLUDE_DOMAINS="${SOURCE_EXCLUDE_DOMAINS:-}"
+        _DEF_SRC_PATTERNS="${SOURCE_EXCLUDE_PATTERNS:-${_DEF_SRC_PATTERNS}}"
+        _DEF_SRC_LOCAL_DAYS="${SOURCE_LOCAL_RETENTION_DAYS:-3}"
+        _DEF_SRC_B2_DAYS="${SOURCE_B2_RETENTION_DAYS:-14}"
         echo -e "  ${GREEN}✔  Phát hiện config cũ — dùng làm mặc định${NC}\n"
     fi
 
@@ -150,7 +158,7 @@ cmd_setup() {
     fi
 
     # --- Step 1: B2 ----------------------------------------------------------
-    section "Bước 1/5 — Backblaze B2"
+    section "Bước 1/6 — Backblaze B2"
     if [[ -n "${_DEF_B2_ACCOUNT}" ]]; then
         echo -e "  ${CYAN}Nhấn Enter để giữ giá trị có sẵn.${NC}\n"
     else
@@ -166,7 +174,7 @@ cmd_setup() {
     [[ -z "${B2_APPLICATION_KEY}" ]] && err "B2 Application Key không được để trống" && exit 1
 
     # --- Step 2: MariaDB -----------------------------------------------------
-    section "Bước 2/5 — MariaDB user"
+    section "Bước 2/6 — MariaDB user"
     ask "Tên user backup MariaDB" "${_DEF_MYSQL_USER}" MYSQL_BACKUP_USER
 
     if [[ -n "${_DEF_MYSQL_PASS}" ]]; then
@@ -190,19 +198,39 @@ cmd_setup() {
     ask "MySQL host" "${_DEF_MYSQL_HOST}" MYSQL_HOST
 
     # --- Step 3: Retention & exclude -----------------------------------------
-    section "Bước 3/5 — Backup"
+    section "Bước 3/6 — Backup Database"
     ask "Giữ backup local (ngày)" "${_DEF_LOCAL_DAYS}" LOCAL_RETENTION_DAYS
     ask "Giữ backup trên B2 (ngày)" "${_DEF_B2_DAYS}" B2_RETENTION_DAYS
     ask "Databases loại trừ" "${_DEF_EXCLUDE}" EXCLUDE_DBS
 
-    # --- Step 4: Cron --------------------------------------------------------
-    section "Bước 4/5 — Cronjob"
+    # --- Step 4: Source code backup -------------------------------------------
+    section "Bước 4/6 — Backup Source Code (HostVN)"
+    echo -e "  ${CYAN}Tự nhận diện website từ /var/hostvn/users (cũ) và${NC}"
+    echo -e "  ${CYAN}/var/hostvn/data/websites (mới), zip từng site rồi upload B2.${NC}\n"
+    ask_yn "Bật backup source code website?" "${_DEF_ENABLE_SRC}" _ENABLE_SRC
+    if [[ "${_ENABLE_SRC}" == "y" ]]; then
+        ENABLE_SOURCE_BACKUP="yes"
+        ask "Domain loại trừ (cách nhau bởi khoảng trắng)" "${_DEF_SRC_EXCLUDE_DOMAINS}" SOURCE_EXCLUDE_DOMAINS
+        ask "Pattern loại trừ khi zip" "${_DEF_SRC_PATTERNS}" SOURCE_EXCLUDE_PATTERNS
+        ask "Giữ backup source local (ngày)" "${_DEF_SRC_LOCAL_DAYS}" SOURCE_LOCAL_RETENTION_DAYS
+        ask "Giữ backup source trên B2 (ngày)" "${_DEF_SRC_B2_DAYS}" SOURCE_B2_RETENTION_DAYS
+    else
+        ENABLE_SOURCE_BACKUP="no"
+        SOURCE_EXCLUDE_DOMAINS="${_DEF_SRC_EXCLUDE_DOMAINS}"
+        SOURCE_EXCLUDE_PATTERNS="${_DEF_SRC_PATTERNS}"
+        SOURCE_LOCAL_RETENTION_DAYS="${_DEF_SRC_LOCAL_DAYS}"
+        SOURCE_B2_RETENTION_DAYS="${_DEF_SRC_B2_DAYS}"
+    fi
+
+    # --- Step 5: Cron --------------------------------------------------------
+    section "Bước 5/6 — Cronjob"
     ask "Giờ chạy backup (0-23)" "${_DEF_CRON_HOUR}" CRON_HOUR
     ask "Phút chạy backup (0-59)" "${_DEF_CRON_MIN}" CRON_MINUTE
     echo -e "  ${CYAN}→ Sẽ chạy lúc ${CRON_HOUR}:$(printf '%02d' "${CRON_MINUTE}") mỗi ngày${NC}"
+    [[ "${ENABLE_SOURCE_BACKUP}" == "yes" ]] && echo -e "  ${CYAN}→ Source code backup sẽ chạy nối tiếp sau DB backup${NC}"
 
-    # --- Step 5: Telegram ----------------------------------------------------
-    section "Bước 5/5 — Telegram (tùy chọn)"
+    # --- Step 6: Telegram ----------------------------------------------------
+    section "Bước 6/6 — Telegram (tùy chọn)"
     local _DEF_USE_TG="n"
     [[ -n "${_DEF_TG_TOKEN}" ]] && _DEF_USE_TG="y"
     ask_yn "Nhận thông báo Telegram?" "${_DEF_USE_TG}" USE_TELEGRAM
@@ -222,6 +250,7 @@ cmd_setup() {
     echo -e "  ${BOLD}Exclude     :${NC} ${EXCLUDE_DBS}"
     echo -e "  ${BOLD}Local keep  :${NC} ${LOCAL_RETENTION_DAYS} ngày"
     echo -e "  ${BOLD}B2 keep     :${NC} ${B2_RETENTION_DAYS} ngày"
+    echo -e "  ${BOLD}Source SC   :${NC} ${ENABLE_SOURCE_BACKUP}"
     echo -e "  ${BOLD}Cron        :${NC} ${CRON_HOUR}:$(printf '%02d' "${CRON_MINUTE}") hàng ngày"
     echo -e "  ${BOLD}Telegram    :${NC} ${USE_TELEGRAM}"
     echo ""
@@ -305,6 +334,13 @@ LOG_DIR="/root/logs"
 
 TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN}"
 TELEGRAM_CHAT_ID="${TELEGRAM_CHAT_ID}"
+
+ENABLE_SOURCE_BACKUP="${ENABLE_SOURCE_BACKUP}"
+SOURCE_BACKUP_DIR="/root/backups/source"
+SOURCE_EXCLUDE_DOMAINS="${SOURCE_EXCLUDE_DOMAINS}"
+SOURCE_EXCLUDE_PATTERNS="${SOURCE_EXCLUDE_PATTERNS}"
+SOURCE_LOCAL_RETENTION_DAYS=${SOURCE_LOCAL_RETENTION_DAYS}
+SOURCE_B2_RETENTION_DAYS=${SOURCE_B2_RETENTION_DAYS}
 EOF
     chmod 600 "${CONFIG_FILE}"
     ok "config.env đã tạo (chmod 600)"
@@ -363,7 +399,19 @@ cmd_run() {
     check_installed; check_configured
     section "Chạy backup ngay"
     info "Đang backup tất cả databases → B2..."
+    [[ "${ENABLE_SOURCE_BACKUP:-no}" == "yes" ]] && info "(source code backup sẽ tự chạy nối tiếp)"
     bash "${INSTALL_DIR}/backup.sh"
+}
+
+cmd_run_source() {
+    check_installed; check_configured
+    section "Chạy backup source code ngay"
+    if [[ ! -f "${INSTALL_DIR}/backup_source.sh" ]]; then
+        err "Không tìm thấy backup_source.sh — chạy: mybackup --update"
+        exit 1
+    fi
+    info "Đang backup source code website → B2..."
+    bash "${INSTALL_DIR}/backup_source.sh"
 }
 
 cmd_status() {
@@ -380,12 +428,25 @@ cmd_status() {
     LATEST_LOG=$(ls -1t /root/logs/backup_mariadb_*.log 2>/dev/null | head -1)
     if [[ -n "${LATEST_LOG}" ]]; then
         echo ""
-        info "Log gần nhất: ${LATEST_LOG}"
+        info "Log DB gần nhất: ${LATEST_LOG}"
         echo ""
         grep -E "✅ Backup completed|Databases|Total size|Remote|❌ ERROR" \
             "${LATEST_LOG}" 2>/dev/null | tail -10 | sed 's/^/    /'
     else
-        warn "Chưa có log backup nào"
+        warn "Chưa có log backup DB nào"
+    fi
+
+    if [[ "${ENABLE_SOURCE_BACKUP:-no}" == "yes" ]]; then
+        LATEST_SRC_LOG=$(ls -1t /root/logs/backup_source_*.log 2>/dev/null | head -1)
+        if [[ -n "${LATEST_SRC_LOG}" ]]; then
+            echo ""
+            info "Log Source gần nhất: ${LATEST_SRC_LOG}"
+            echo ""
+            grep -E "✅ Source backup completed|Websites|Total size|Remote|❌ ERROR" \
+                "${LATEST_SRC_LOG}" 2>/dev/null | tail -10 | sed 's/^/    /'
+        else
+            warn "Chưa có log backup source nào"
+        fi
     fi
 
     echo ""
@@ -406,11 +467,19 @@ cmd_logs() {
     LATEST_LOG=$(ls -1t /root/logs/backup_mariadb_*.log 2>/dev/null | head -1)
     if [[ -z "${LATEST_LOG}" ]]; then
         warn "Chưa có log nào"
-        exit 0
+    else
+        info "File: ${LATEST_LOG}"
+        echo ""
+        tail -50 "${LATEST_LOG}"
     fi
-    info "File: ${LATEST_LOG}"
-    echo ""
-    tail -50 "${LATEST_LOG}"
+
+    LATEST_SRC_LOG=$(ls -1t /root/logs/backup_source_*.log 2>/dev/null | head -1)
+    if [[ -n "${LATEST_SRC_LOG}" ]]; then
+        echo ""
+        info "File: ${LATEST_SRC_LOG}"
+        echo ""
+        tail -50 "${LATEST_SRC_LOG}"
+    fi
 }
 
 cmd_update() {
@@ -421,6 +490,12 @@ cmd_update() {
         && chmod +x "${INSTALL_DIR}/backup.sh" \
         && ok "backup.sh đã cập nhật" \
         || { err "Không thể tải backup.sh"; exit 1; }
+
+    info "Tải backup_source.sh..."
+    curl -fsSL "${GITHUB_RAW}/backup_source.sh" -o "${INSTALL_DIR}/backup_source.sh" \
+        && chmod +x "${INSTALL_DIR}/backup_source.sh" \
+        && ok "backup_source.sh đã cập nhật" \
+        || { err "Không thể tải backup_source.sh"; exit 1; }
 
     info "Tải mybackup..."
     curl -fsSL "${GITHUB_RAW}/mybackup" -o "${INSTALL_DIR}/mybackup" \
@@ -458,6 +533,7 @@ cmd_uninstall() {
     echo ""
     echo -e "  ${YELLOW}Sẽ GIỮ lại:${NC}"
     echo "    ✓ /root/backups/mariadb/ (backup files)"
+    echo "    ✓ /root/backups/source/ (source code backup files)"
     echo "    ✓ /root/logs/ (log files)"
     echo "    ✓ MariaDB user '${MYSQL_BACKUP_USER:-backup_user}'"
     echo "    ✓ rclone config"
@@ -494,7 +570,8 @@ cmd_help() {
     echo ""
     echo -e "  ${BOLD}COMMANDS:${NC}"
     printf "    %-20s %s\n" "--setup"     "Wizard cấu hình (lần đầu hoặc thay đổi config)"
-    printf "    %-20s %s\n" "--run"       "Chạy backup ngay"
+    printf "    %-20s %s\n" "--run"       "Chạy backup database ngay (+ source nếu bật)"
+    printf "    %-20s %s\n" "--run-source" "Chạy backup source code ngay"
     printf "    %-20s %s\n" "--status"    "Trạng thái + log gần nhất"
     printf "    %-20s %s\n" "--logs"      "50 dòng log cuối"
     printf "    %-20s %s\n" "--cron"      "Xem cronjob hiện tại"
@@ -509,6 +586,7 @@ cmd_help() {
     if [[ -n "${CRON_HOUR:-}" ]]; then
         echo -e "  ${BOLD}CRONJOB:${NC}      Hàng ngày lúc ${CRON_HOUR}:$(printf '%02d' "${CRON_MINUTE:-30}")"
     fi
+    echo -e "  ${BOLD}SOURCE SC:${NC}    ${ENABLE_SOURCE_BACKUP:-no}"
     echo ""
 }
 
@@ -522,12 +600,13 @@ cmd_menu() {
         echo ""
     fi
     echo "    0) Setup / cấu hình lại"
-    echo "    1) Chạy backup ngay"
-    echo "    2) Xem trạng thái"
-    echo "    3) Xem logs"
-    echo "    4) Xem cronjob"
-    echo "    5) Cập nhật scripts"
-    echo "    6) Gỡ cài đặt"
+    echo "    1) Chạy backup ngay (DB + source nếu bật)"
+    echo "    2) Chạy backup source code ngay"
+    echo "    3) Xem trạng thái"
+    echo "    4) Xem logs"
+    echo "    5) Xem cronjob"
+    echo "    6) Cập nhật scripts"
+    echo "    7) Gỡ cài đặt"
     echo "    q) Thoát"
     echo ""
     echo -ne "  ${BOLD}Chọn:${NC} "
@@ -535,11 +614,12 @@ cmd_menu() {
     case "${CHOICE}" in
         0) cmd_setup ;;
         1) cmd_run ;;
-        2) cmd_status ;;
-        3) cmd_logs ;;
-        4) cmd_cron ;;
-        5) cmd_update ;;
-        6) cmd_uninstall ;;
+        2) cmd_run_source ;;
+        3) cmd_status ;;
+        4) cmd_logs ;;
+        5) cmd_cron ;;
+        6) cmd_update ;;
+        7) cmd_uninstall ;;
         q|Q) exit 0 ;;
         *) err "Lựa chọn không hợp lệ" && exit 1 ;;
     esac
@@ -551,6 +631,7 @@ cmd_menu() {
 case "${1:-}" in
     --setup)     cmd_setup ;;
     --run)       cmd_run ;;
+    --run-source) cmd_run_source ;;
     --status)    cmd_status ;;
     --logs)      cmd_logs ;;
     --cron)      cmd_cron ;;
