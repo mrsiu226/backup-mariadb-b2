@@ -101,7 +101,7 @@ cmd_setup() {
     local _DEF_CRON_HOUR="2" _DEF_CRON_MIN="30"
     local _DEF_TG_TOKEN="" _DEF_TG_CHAT=""
     local _DEF_ENABLE_SRC="n" _DEF_SRC_EXCLUDE_DOMAINS=""
-    local _DEF_SRC_PATTERNS="vendor node_modules .git .svn .cache tmp *.log storage/framework/cache storage/framework/sessions storage/framework/views storage/logs storage/debugbar wp-content/cache wp-content/uploads/cache downloads *.webm *.mp4 *.mkv *.avi *.mov *.flv *.zip *.tar *.tar.gz *.tar.bz2 *.sql"
+    local _DEF_SRC_PATTERNS="/vendor node_modules .git .svn .cache cache tmp logs *.log error_log* storage/framework/sessions storage/framework/views storage/debugbar var/log .next/cache wp-content/updraft wp-content/backups wp-content/upgrade wp-content/wflogs wp-content/et-cache wp-content/ai1wm-backups wp-content/wp-snapshots wp-content/backups-dup-lite wp-content/wpvividbackups"
     local _DEF_SRC_LOCAL_DAYS="3" _DEF_SRC_B2_DAYS="14"
 
     if [[ -f "${CONFIG_FILE}" ]]; then
@@ -124,6 +124,7 @@ cmd_setup() {
         _DEF_SRC_PATTERNS="${SOURCE_EXCLUDE_PATTERNS:-${_DEF_SRC_PATTERNS}}"
         _DEF_SRC_LOCAL_DAYS="${SOURCE_LOCAL_RETENTION_DAYS:-3}"
         _DEF_SRC_B2_DAYS="${SOURCE_B2_RETENTION_DAYS:-14}"
+        _DEF_SRC_INTERVAL="${SOURCE_BACKUP_INTERVAL_DAYS:-1}"
         echo -e "  ${GREEN}✔  Phát hiện config cũ — dùng làm mặc định${NC}\n"
     fi
 
@@ -212,6 +213,7 @@ cmd_setup() {
         ENABLE_SOURCE_BACKUP="yes"
         ask "Domain loại trừ (cách nhau bởi khoảng trắng)" "${_DEF_SRC_EXCLUDE_DOMAINS}" SOURCE_EXCLUDE_DOMAINS
         ask "Pattern loại trừ khi zip" "${_DEF_SRC_PATTERNS}" SOURCE_EXCLUDE_PATTERNS
+        ask "Chu kỳ backup source (ngày: 1=hàng ngày, 3, 5, 7=hàng tuần)" "${_DEF_SRC_INTERVAL}" SOURCE_BACKUP_INTERVAL_DAYS
         ask "Giữ backup source local (ngày)" "${_DEF_SRC_LOCAL_DAYS}" SOURCE_LOCAL_RETENTION_DAYS
         ask "Giữ backup source trên B2 (ngày)" "${_DEF_SRC_B2_DAYS}" SOURCE_B2_RETENTION_DAYS
     else
@@ -220,6 +222,7 @@ cmd_setup() {
         SOURCE_EXCLUDE_PATTERNS="${_DEF_SRC_PATTERNS}"
         SOURCE_LOCAL_RETENTION_DAYS="${_DEF_SRC_LOCAL_DAYS}"
         SOURCE_B2_RETENTION_DAYS="${_DEF_SRC_B2_DAYS}"
+        SOURCE_BACKUP_INTERVAL_DAYS="${_DEF_SRC_INTERVAL}"
     fi
 
     # --- Step 5: Cron --------------------------------------------------------
@@ -250,7 +253,7 @@ cmd_setup() {
     echo -e "  ${BOLD}Exclude     :${NC} ${EXCLUDE_DBS}"
     echo -e "  ${BOLD}Local keep  :${NC} ${LOCAL_RETENTION_DAYS} ngày"
     echo -e "  ${BOLD}B2 keep     :${NC} ${B2_RETENTION_DAYS} ngày"
-    echo -e "  ${BOLD}Source SC   :${NC} ${ENABLE_SOURCE_BACKUP}"
+    echo -e "  ${BOLD}Source SC   :${NC} ${ENABLE_SOURCE_BACKUP} (mỗi ${SOURCE_BACKUP_INTERVAL_DAYS} ngày)"
     echo -e "  ${BOLD}Cron        :${NC} ${CRON_HOUR}:$(printf '%02d' "${CRON_MINUTE}") hàng ngày"
     echo -e "  ${BOLD}Telegram    :${NC} ${USE_TELEGRAM}"
     echo ""
@@ -341,6 +344,7 @@ SOURCE_EXCLUDE_DOMAINS="${SOURCE_EXCLUDE_DOMAINS}"
 SOURCE_EXCLUDE_PATTERNS="${SOURCE_EXCLUDE_PATTERNS}"
 SOURCE_LOCAL_RETENTION_DAYS=${SOURCE_LOCAL_RETENTION_DAYS}
 SOURCE_B2_RETENTION_DAYS=${SOURCE_B2_RETENTION_DAYS}
+SOURCE_BACKUP_INTERVAL_DAYS=${SOURCE_BACKUP_INTERVAL_DAYS}
 EOF
     chmod 600 "${CONFIG_FILE}"
     ok "config.env đã tạo (chmod 600)"
@@ -411,7 +415,7 @@ cmd_run_source() {
         exit 1
     fi
     info "Đang backup source code website → B2..."
-    bash "${INSTALL_DIR}/backup_source.sh"
+    bash "${INSTALL_DIR}/backup_source.sh" --force
 }
 
 cmd_status() {

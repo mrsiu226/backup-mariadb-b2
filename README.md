@@ -128,19 +128,33 @@ Hoặc bật trực tiếp trong `config.env`:
 ENABLE_SOURCE_BACKUP="yes"
 ```
 
-Khi bật, `backup.sh` sẽ tự động chạy `backup_source.sh` nối tiếp sau backup database (dùng chung 1 cronjob). Có thể chạy riêng bằng `mybackup --run-source`.
+Khi bật, `backup.sh` sẽ tự động chạy `backup_source.sh` nối tiếp sau backup database (dùng chung 1 cronjob). Có thể chạy riêng bằng `mybackup --run-source` (luôn chạy, bỏ qua chu kỳ).
+
+### Backup theo chu kỳ (server ít dung lượng)
+
+Database vẫn backup hàng ngày, riêng source có thể thưa hơn:
+
+```bash
+SOURCE_BACKUP_INTERVAL_DAYS=3   # 1=hàng ngày (mặc định), 3, 5, 7=hàng tuần
+```
+
+Cron vẫn chạy mỗi ngày, script tự bỏ qua nếu lần thành công gần nhất chưa đủ N ngày (mốc lưu ở `/root/backups/source/.last_success`). Nếu có site lỗi, mốc không được ghi → lần cron sau tự thử lại. Nên đặt `SOURCE_B2_RETENTION_DAYS` ≥ 2 × chu kỳ để B2 luôn giữ ít nhất 2 bản.
 
 ### Loại trừ file/thư mục khi zip
 
-Mặc định loại trừ các thư mục rác không cần thiết:
+Mặc định loại trừ cache/log/thư mục sinh lại được của Laravel, Next.js, Symfony, WordPress và các plugin backup:
 
 ```
-node_modules .git .svn cache tmp logs *.log
-storage/framework/cache storage/logs
-wp-content/cache wp-content/uploads/cache
+/vendor node_modules .git .svn .cache cache tmp logs *.log error_log*
+storage/framework/sessions storage/framework/views storage/debugbar var/log .next/cache
+wp-content/{updraft,backups,upgrade,wflogs,et-cache,ai1wm-backups,wp-snapshots,backups-dup-lite,wpvividbackups}
 ```
+
+Quy tắc pattern: tên thư mục → loại ở mọi cấp; có `*` → khớp file; bắt đầu bằng `/` → chỉ ở gốc site (`/vendor` loại `vendor` của Laravel nhưng giữ `vendor` trong plugin WordPress). Video/zip/sql **không** bị loại mặc định — muốn bỏ thì tự thêm `*.mp4 *.zip *.sql` vào `SOURCE_EXCLUDE_PATTERNS`.
 
 Chỉnh sửa qua biến `SOURCE_EXCLUDE_PATTERNS` trong `config.env` (cách nhau bởi khoảng trắng). Loại trừ hẳn 1 domain không muốn backup qua `SOURCE_EXCLUDE_DOMAINS`.
+
+Mỗi zip còn chứa thư mục `_nginx/` (`nginx.conf` = vhost từ `/etc/nginx/sites-available`, `nginx.enabled` = `enabled`/`disabled`) để dựng lại server mới. Site nào không có vhost thì bỏ qua.
 
 ### Cấu trúc backup source trên B2
 

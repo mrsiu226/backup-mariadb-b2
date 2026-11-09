@@ -23,9 +23,11 @@ source "${CONFIG_FILE}"
 #--- Defaults (nếu config cũ chưa có các biến source backup) ------------------
 SOURCE_BACKUP_DIR="${SOURCE_BACKUP_DIR:-/root/backups/source}"
 SOURCE_EXCLUDE_DOMAINS="${SOURCE_EXCLUDE_DOMAINS:-}"
-SOURCE_EXCLUDE_PATTERNS="${SOURCE_EXCLUDE_PATTERNS:-node_modules .git .svn cache tmp logs *.log storage/framework/cache storage/logs wp-content/cache wp-content/uploads/cache}"
+SOURCE_EXCLUDE_PATTERNS="${SOURCE_EXCLUDE_PATTERNS:-/vendor node_modules .git .svn .cache cache tmp logs *.log error_log* storage/framework/sessions storage/framework/views storage/debugbar var/log .next/cache wp-content/updraft wp-content/backups wp-content/upgrade wp-content/wflogs wp-content/et-cache wp-content/ai1wm-backups wp-content/wp-snapshots wp-content/backups-dup-lite wp-content/wpvividbackups}"
 SOURCE_LOCAL_RETENTION_DAYS="${SOURCE_LOCAL_RETENTION_DAYS:-3}"
 SOURCE_B2_RETENTION_DAYS="${SOURCE_B2_RETENTION_DAYS:-14}"
+# Chu kỳ backup source (ngày): 1=hàng ngày, 3, 5, 7... Chạy tay với --force để bỏ qua.
+SOURCE_BACKUP_INTERVAL_DAYS="${SOURCE_BACKUP_INTERVAL_DAYS:-1}"
 
 HOSTVN_OLD_DIR="/var/hostvn/users"
 HOSTVN_NEW_DIR="/var/hostvn/data/websites"
@@ -38,7 +40,7 @@ LOG_FILE="${LOG_DIR}/backup_source_$(date +%Y%m%d).log"
 SOURCE_BACKUP_DAILY_DIR="${SOURCE_BACKUP_DIR}/${DATE_DIR}"
 
 #--- Setup dirs ---------------------------------------------------------------
-mkdir -p "${SOURCE_BACKUP_DAILY_DIR}" "${LOG_DIR}"
+mkdir -p "${LOG_DIR}"
 
 #--- Functions ----------------------------------------------------------------
 log() {
@@ -64,6 +66,39 @@ error_exit() {
 
 trap 'error_exit "Script failed at line $LINENO"' ERR
 
+#--- Chu kỳ: bỏ qua nếu lần thành công gần nhất chưa đủ N ngày ----------------
+LAST_OK_FILE="${SOURCE_BACKUP_DIR}/.last_success"
+if [[ "${1:-}" != "--force" && "${SOURCE_BACKUP_INTERVAL_DAYS}" =~ ^[0-9]+$ && -f "${LAST_OK_FILE}" ]]; then
+    LAST_OK="$(cat "${LAST_OK_FILE}")"
+    if LAST_EPOCH=$(date -d "${LAST_OK}" +%s 2>/dev/null); then
+        ELAPSED_DAYS=$(( ($(date -d "${DATE_DIR}" +%s) - LAST_EPOCH) / 86400 ))
+        if (( ELAPSED_DAYS < SOURCE_BACKUP_INTERVAL_DAYS )); then
+            log "⏭️  Bỏ qua source backup: lần cuối ${LAST_OK} (${ELAPSED_DAYS}/${SOURCE_BACKUP_INTERVAL_DAYS} ngày)"
+            exit 0
+        fi
+    fi
+fi
+mkdir -p "${SOURCE_BACKUP_DAILY_DIR}"
+
+# Thêm nginx vhost + trạng thái enabled vào zip (thư mục _nginx/). Không có thì bỏ qua.
+add_nginx_to_zip() {
+    local domain="$1" zip_file="$2" conf="" tmp
+    conf="/etc/nginx/sites-available/${domain}.conf"
+    [[ -f "${conf}" ]] || conf="$(find /etc/nginx/sites-available -maxdepth 1 -name "${domain}*.conf" 2>/dev/null | head -n1 || true)"
+    [[ -n "${conf}" && -f "${conf}" ]] || return 0
+    tmp="$(mktemp -d)"
+    mkdir "${tmp}/_nginx"
+    cp "${conf}" "${tmp}/_nginx/nginx.conf"
+    if [[ -e "/etc/nginx/sites-enabled/${domain}.conf" ]]; then
+        echo enabled > "${tmp}/_nginx/nginx.enabled"
+    else
+        echo disabled > "${tmp}/_nginx/nginx.enabled"
+    fi
+    (cd "${tmp}" && zip -q -X "${zip_file}" _nginx/nginx.conf _nginx/nginx.enabled) >> "${LOG_FILE}" 2>&1 \
+        || log "⚠️  ${domain}: không thêm được nginx config vào zip"
+    rm -rf "${tmp}"
+}
+
 # In: đọc danh sách site, mỗi dòng "domain|source_path"
 discover_sites() {
     local conf domain base_dir public_html site_path
@@ -79,7 +114,7 @@ discover_sites() {
                 site_path="${base_dir}"
             fi
             echo "${domain}|${site_path}"
-        done < <(find "${HOSTVN_NEW_DIR}" -mindepth 2 -maxdepth 2 -type f -name ".settings.conf" 2>/dev/null)
+        done < <(find "${HOSTVN_NEW_DIR}" -mindepth 2 -maxdepth 2 -type f \( -name ".settings.conf" -o -name ".setting.conf" \) 2>/dev/null)
     fi
 
     if [[ -d "${HOSTVN_OLD_DIR}" ]]; then
@@ -125,9 +160,13 @@ log "🔎 Phát hiện ${#SITES[@]} website"
 # - Thư mục (không chứa *): loại trừ cả dir lẫn nội dung bên trong
 # - File glob (chứa *): chỉ match file, không thêm hậu tố /*
 #==============================================================================
+set -f   # tắt glob: pattern như *.log không được bung theo thư mục hiện tại
 ZIP_EXCLUDES=()
+ROOT_EXCLUDES=""   # pattern bắt đầu bằng "/" → chỉ loại ở gốc site (vd /vendor), ghép tiền tố theo từng site
 for PATTERN in ${SOURCE_EXCLUDE_PATTERNS}; do
-    if [[ "${PATTERN}" == *"*"* ]]; then
+    if [[ "${PATTERN}" == /* ]]; then
+        ROOT_EXCLUDES="${ROOT_EXCLUDES} ${PATTERN#/}"
+    elif [[ "${PATTERN}" == *"*"* ]]; then
         # File glob pattern (e.g. *.log, *.webm) — match mọi cấp thư mục
         ZIP_EXCLUDES+=("*/${PATTERN}" "${PATTERN}")
     else
@@ -135,6 +174,7 @@ for PATTERN in ${SOURCE_EXCLUDE_PATTERNS}; do
         ZIP_EXCLUDES+=("*/${PATTERN}/" "*/${PATTERN}/*" "${PATTERN}/" "${PATTERN}/*")
     fi
 done
+set +f
 
 #==============================================================================
 # ZIP EACH SITE
@@ -165,8 +205,14 @@ for ENTRY in "${SITES[@]:-}"; do
     SITE_PARENT="$(dirname "${SITE_PATH}")"
     SITE_BASENAME="$(basename "${SITE_PATH}")"
 
+    SITE_EXCLUDES=("${ZIP_EXCLUDES[@]}")
+    for ROOT_NAME in ${ROOT_EXCLUDES}; do
+        SITE_EXCLUDES+=("${SITE_BASENAME}/${ROOT_NAME}/" "${SITE_BASENAME}/${ROOT_NAME}/*")
+    done
+
     # -y: store symlinks as-is (không follow) → tránh symlink vòng lặp gây file khổng lồ
-    if (cd "${SITE_PARENT}" && zip -r -q -X -y "${ZIP_FILE}" "${SITE_BASENAME}" -x "${ZIP_EXCLUDES[@]}") >> "${LOG_FILE}" 2>&1; then
+    if (cd "${SITE_PARENT}" && zip -r -q -X -y "${ZIP_FILE}" "${SITE_BASENAME}" -x "${SITE_EXCLUDES[@]}") >> "${LOG_FILE}" 2>&1; then
+        add_nginx_to_zip "${DOMAIN}" "${ZIP_FILE}"
         FILE_SIZE=$(stat -c%s "${ZIP_FILE}" 2>/dev/null || echo 0)
         FILE_SIZE_MB=$(echo "scale=2; ${FILE_SIZE}/1024/1024" | bc)
         TOTAL_SIZE=$((TOTAL_SIZE + FILE_SIZE))
@@ -235,6 +281,9 @@ for DIR in ${REMOTE_DIRS}; do
 done
 log "✅ B2 cleanup done"
 
+# Chỉ ghi mốc khi không có site lỗi → lần cron sau tự thử lại
+[[ -z "${FAILED_SITES}" ]] && echo "${DATE_DIR}" > "${LAST_OK_FILE}"
+
 #==============================================================================
 # SUMMARY
 #==============================================================================
@@ -250,6 +299,7 @@ log "  Local path : ${SOURCE_BACKUP_DAILY_DIR}/"
 log "  Remote     : ${B2_REMOTE_NAME}:${B2_BUCKET}/${HOSTNAME}/source/${DATE_DIR}/"
 log "  Local keep : ${SOURCE_LOCAL_RETENTION_DAYS} days"
 log "  B2 keep    : ${SOURCE_B2_RETENTION_DAYS} days"
+log "  Interval   : mỗi ${SOURCE_BACKUP_INTERVAL_DAYS} ngày"
 [[ -n "${SKIPPED_SITES}" ]] && log "  ⏭️  Skipped :${SKIPPED_SITES}"
 [[ -n "${FAILED_SITES}" ]] && log "  ⚠️  Failed  :${FAILED_SITES}"
 log "=========================================="
