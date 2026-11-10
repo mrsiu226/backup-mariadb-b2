@@ -100,7 +100,7 @@ cmd_setup() {
     local _DEF_EXCLUDE="information_schema performance_schema sys mysql"
     local _DEF_CRON_HOUR="2" _DEF_CRON_MIN="30"
     local _DEF_TG_TOKEN="" _DEF_TG_CHAT=""
-    local _DEF_ENABLE_SRC="n" _DEF_SRC_EXCLUDE_DOMAINS=""
+    local _DEF_ENABLE_SRC="n" _DEF_SRC_EXCLUDE_DOMAINS="" _DEF_SRC_INCLUDE=""
     local _DEF_SRC_PATTERNS="/vendor node_modules .git .svn .cache cache tmp logs *.log error_log* storage/framework/sessions storage/framework/views storage/debugbar var/log .next/cache wp-content/updraft wp-content/backups wp-content/upgrade wp-content/wflogs wp-content/et-cache wp-content/ai1wm-backups wp-content/wp-snapshots wp-content/backups-dup-lite wp-content/wpvividbackups"
     local _DEF_SRC_LOCAL_DAYS="3" _DEF_SRC_B2_DAYS="14"
 
@@ -121,6 +121,7 @@ cmd_setup() {
         _DEF_TG_CHAT="${TELEGRAM_CHAT_ID:-}"
         [[ "${ENABLE_SOURCE_BACKUP:-no}" == "yes" ]] && _DEF_ENABLE_SRC="y"
         _DEF_SRC_EXCLUDE_DOMAINS="${SOURCE_EXCLUDE_DOMAINS:-}"
+        _DEF_SRC_INCLUDE="${SOURCE_INCLUDE_DOMAINS:-}"
         _DEF_SRC_PATTERNS="${SOURCE_EXCLUDE_PATTERNS:-${_DEF_SRC_PATTERNS}}"
         _DEF_SRC_LOCAL_DAYS="${SOURCE_LOCAL_RETENTION_DAYS:-3}"
         _DEF_SRC_B2_DAYS="${SOURCE_B2_RETENTION_DAYS:-14}"
@@ -211,6 +212,33 @@ cmd_setup() {
     ask_yn "Bật backup source code website?" "${_DEF_ENABLE_SRC}" _ENABLE_SRC
     if [[ "${_ENABLE_SRC}" == "y" ]]; then
         ENABLE_SOURCE_BACKUP="yes"
+        local _SITES=() _i _pick _tok _sel _ok
+        mapfile -t _SITES < <(bash "${INSTALL_DIR}/backup_source.sh" --list 2>/dev/null || true)
+        if (( ${#_SITES[@]} > 0 )); then
+            echo -e "\n  ${BOLD}Website phát hiện được:${NC}"
+            for _i in "${!_SITES[@]}"; do echo "    $((_i + 1))) ${_SITES[_i]}"; done
+            echo -e "  ${CYAN}Nhập số (hoặc domain) cách nhau bởi khoảng trắng/dấu phẩy; 'all' = tất cả${NC}"
+            while true; do
+                ask "Chọn site backup tự động" "${_DEF_SRC_INCLUDE:-all}" _pick
+                _pick="${_pick//,/ }"; _sel=""; _ok=1
+                if [[ "${_pick,,}" != "all" ]]; then
+                    for _tok in ${_pick}; do
+                        if [[ "${_tok}" =~ ^[0-9]+$ ]] && (( _tok >= 1 && _tok <= ${#_SITES[@]} )); then
+                            _sel+="${_SITES[_tok-1]} "
+                        elif [[ " ${_SITES[*]} " == *" ${_tok} "* ]]; then
+                            _sel+="${_tok} "
+                        else
+                            warn "Không hợp lệ: ${_tok}"; _ok=0; break
+                        fi
+                    done
+                fi
+                (( _ok )) && break
+            done
+            SOURCE_INCLUDE_DOMAINS="${_sel% }"
+        else
+            warn "Không phát hiện website nào — giữ nguyên lựa chọn cũ (rỗng = tất cả)"
+            SOURCE_INCLUDE_DOMAINS="${_DEF_SRC_INCLUDE}"
+        fi
         ask "Domain loại trừ (cách nhau bởi khoảng trắng)" "${_DEF_SRC_EXCLUDE_DOMAINS}" SOURCE_EXCLUDE_DOMAINS
         ask "Pattern loại trừ khi zip" "${_DEF_SRC_PATTERNS}" SOURCE_EXCLUDE_PATTERNS
         ask "Chu kỳ backup source (ngày: 1=hàng ngày, 3, 5, 7=hàng tuần)" "${_DEF_SRC_INTERVAL}" SOURCE_BACKUP_INTERVAL_DAYS
@@ -218,6 +246,7 @@ cmd_setup() {
         ask "Giữ backup source trên B2 (ngày)" "${_DEF_SRC_B2_DAYS}" SOURCE_B2_RETENTION_DAYS
     else
         ENABLE_SOURCE_BACKUP="no"
+        SOURCE_INCLUDE_DOMAINS="${_DEF_SRC_INCLUDE}"
         SOURCE_EXCLUDE_DOMAINS="${_DEF_SRC_EXCLUDE_DOMAINS}"
         SOURCE_EXCLUDE_PATTERNS="${_DEF_SRC_PATTERNS}"
         SOURCE_LOCAL_RETENTION_DAYS="${_DEF_SRC_LOCAL_DAYS}"
@@ -340,6 +369,7 @@ TELEGRAM_CHAT_ID="${TELEGRAM_CHAT_ID}"
 
 ENABLE_SOURCE_BACKUP="${ENABLE_SOURCE_BACKUP}"
 SOURCE_BACKUP_DIR="/root/backups/source"
+SOURCE_INCLUDE_DOMAINS="${SOURCE_INCLUDE_DOMAINS}"
 SOURCE_EXCLUDE_DOMAINS="${SOURCE_EXCLUDE_DOMAINS}"
 SOURCE_EXCLUDE_PATTERNS="${SOURCE_EXCLUDE_PATTERNS}"
 SOURCE_LOCAL_RETENTION_DAYS=${SOURCE_LOCAL_RETENTION_DAYS}

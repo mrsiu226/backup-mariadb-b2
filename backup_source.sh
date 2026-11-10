@@ -13,15 +13,17 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_FILE="${SCRIPT_DIR}/config.env"
 
 # Load config
-if [[ ! -f "${CONFIG_FILE}" ]]; then
+if [[ -f "${CONFIG_FILE}" ]]; then
+    # shellcheck source=config.env
+    source "${CONFIG_FILE}"
+elif [[ "${1:-}" != "--list" ]]; then
     echo "❌ ERROR: config.env not found. Run ./install.sh first."
     exit 1
 fi
-# shellcheck source=config.env
-source "${CONFIG_FILE}"
 
 #--- Defaults (nếu config cũ chưa có các biến source backup) ------------------
 SOURCE_BACKUP_DIR="${SOURCE_BACKUP_DIR:-/root/backups/source}"
+SOURCE_INCLUDE_DOMAINS="${SOURCE_INCLUDE_DOMAINS:-}"   # rỗng = tất cả site
 SOURCE_EXCLUDE_DOMAINS="${SOURCE_EXCLUDE_DOMAINS:-}"
 SOURCE_EXCLUDE_PATTERNS="${SOURCE_EXCLUDE_PATTERNS:-/vendor node_modules .git .svn .cache cache tmp logs *.log error_log* storage/framework/sessions storage/framework/views storage/debugbar var/log .next/cache wp-content/updraft wp-content/backups wp-content/upgrade wp-content/wflogs wp-content/et-cache wp-content/ai1wm-backups wp-content/wp-snapshots wp-content/backups-dup-lite wp-content/wpvividbackups}"
 SOURCE_LOCAL_RETENTION_DAYS="${SOURCE_LOCAL_RETENTION_DAYS:-3}"
@@ -31,6 +33,40 @@ SOURCE_BACKUP_INTERVAL_DAYS="${SOURCE_BACKUP_INTERVAL_DAYS:-1}"
 
 HOSTVN_OLD_DIR="/var/hostvn/users"
 HOSTVN_NEW_DIR="/var/hostvn/data/websites"
+
+# In: đọc danh sách site, mỗi dòng "domain|source_path"
+discover_sites() {
+    local conf domain base_dir public_html site_path
+
+    if [[ -d "${HOSTVN_NEW_DIR}" ]]; then
+        while IFS= read -r conf; do
+            domain=$(grep -m1 "^domain=" "${conf}" | sed -E "s/^domain=//; s/^'//; s/'\$//")
+            base_dir=$(grep -m1 "^base_dir=" "${conf}" | sed -E "s/^base_dir=//; s/^'//; s/'\$//")
+            [[ -z "${domain}" || -z "${base_dir}" ]] && continue
+            if [[ -d "${base_dir}/public_html" ]]; then
+                site_path="${base_dir}/public_html"
+            else
+                site_path="${base_dir}"
+            fi
+            echo "${domain}|${site_path}"
+        done < <(find "${HOSTVN_NEW_DIR}" -mindepth 2 -maxdepth 2 -type f \( -name ".settings.conf" -o -name ".setting.conf" \) 2>/dev/null)
+    fi
+
+    if [[ -d "${HOSTVN_OLD_DIR}" ]]; then
+        while IFS= read -r conf; do
+            domain=$(grep -m1 "^domain=" "${conf}" | cut -d= -f2-)
+            public_html=$(grep -m1 "^public_html=" "${conf}" | cut -d= -f2-)
+            [[ -z "${domain}" || -z "${public_html}" ]] && continue
+            echo "${domain}|${public_html}"
+        done < <(find "${HOSTVN_OLD_DIR}" -maxdepth 1 -type f -name "*.conf" 2>/dev/null)
+    fi
+}
+
+# --list: in domain các site phát hiện được (dùng cho mybackup --setup), không backup
+if [[ "${1:-}" == "--list" ]]; then
+    discover_sites | awk -F'|' '!seen[$1]++ {print $1}'
+    exit 0
+fi
 
 #--- Derived vars -------------------------------------------------------------
 HOSTNAME=$(hostname)
@@ -99,34 +135,6 @@ add_nginx_to_zip() {
     rm -rf "${tmp}"
 }
 
-# In: đọc danh sách site, mỗi dòng "domain|source_path"
-discover_sites() {
-    local conf domain base_dir public_html site_path
-
-    if [[ -d "${HOSTVN_NEW_DIR}" ]]; then
-        while IFS= read -r conf; do
-            domain=$(grep -m1 "^domain=" "${conf}" | sed -E "s/^domain=//; s/^'//; s/'\$//")
-            base_dir=$(grep -m1 "^base_dir=" "${conf}" | sed -E "s/^base_dir=//; s/^'//; s/'\$//")
-            [[ -z "${domain}" || -z "${base_dir}" ]] && continue
-            if [[ -d "${base_dir}/public_html" ]]; then
-                site_path="${base_dir}/public_html"
-            else
-                site_path="${base_dir}"
-            fi
-            echo "${domain}|${site_path}"
-        done < <(find "${HOSTVN_NEW_DIR}" -mindepth 2 -maxdepth 2 -type f \( -name ".settings.conf" -o -name ".setting.conf" \) 2>/dev/null)
-    fi
-
-    if [[ -d "${HOSTVN_OLD_DIR}" ]]; then
-        while IFS= read -r conf; do
-            domain=$(grep -m1 "^domain=" "${conf}" | cut -d= -f2-)
-            public_html=$(grep -m1 "^public_html=" "${conf}" | cut -d= -f2-)
-            [[ -z "${domain}" || -z "${public_html}" ]] && continue
-            echo "${domain}|${public_html}"
-        done < <(find "${HOSTVN_OLD_DIR}" -maxdepth 1 -type f -name "*.conf" 2>/dev/null)
-    fi
-}
-
 #==============================================================================
 # PREFLIGHT CHECKS
 #==============================================================================
@@ -190,6 +198,11 @@ for ENTRY in "${SITES[@]:-}"; do
 
     if echo "${SOURCE_EXCLUDE_DOMAINS}" | grep -qw "${DOMAIN}"; then
         log "⏭️  Skipping (excluded): ${DOMAIN}"
+        continue
+    fi
+
+    if [[ -n "${SOURCE_INCLUDE_DOMAINS}" && " ${SOURCE_INCLUDE_DOMAINS} " != *" ${DOMAIN} "* ]]; then
+        log "⏭️  Skipping (không nằm trong danh sách chọn): ${DOMAIN}"
         continue
     fi
 
@@ -300,6 +313,7 @@ log "  Remote     : ${B2_REMOTE_NAME}:${B2_BUCKET}/${HOSTNAME}/source/${DATE_DIR
 log "  Local keep : ${SOURCE_LOCAL_RETENTION_DAYS} days"
 log "  B2 keep    : ${SOURCE_B2_RETENTION_DAYS} days"
 log "  Interval   : mỗi ${SOURCE_BACKUP_INTERVAL_DAYS} ngày"
+[[ -n "${SOURCE_INCLUDE_DOMAINS}" ]] && log "  Chọn site  : ${SOURCE_INCLUDE_DOMAINS}"
 [[ -n "${SKIPPED_SITES}" ]] && log "  ⏭️  Skipped :${SKIPPED_SITES}"
 [[ -n "${FAILED_SITES}" ]] && log "  ⚠️  Failed  :${FAILED_SITES}"
 log "=========================================="

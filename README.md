@@ -154,6 +154,10 @@ Quy tắc pattern: tên thư mục → loại ở mọi cấp; có `*` → khớ
 
 Chỉnh sửa qua biến `SOURCE_EXCLUDE_PATTERNS` trong `config.env` (cách nhau bởi khoảng trắng). Loại trừ hẳn 1 domain không muốn backup qua `SOURCE_EXCLUDE_DOMAINS`.
 
+### Chọn site backup tự động
+
+`mybackup --setup` (Bước 4) liệt kê các website phát hiện được để chọn theo số, hoặc `all`. Kết quả lưu ở `SOURCE_INCLUDE_DOMAINS` trong `config.env` (cách nhau bởi khoảng trắng, **trống = tất cả**). Site mới thêm sau đó sẽ không tự được backup cho đến khi thêm vào danh sách. `SOURCE_EXCLUDE_DOMAINS` vẫn được ưu tiên hơn. Xem nhanh danh sách site: `bash /opt/backup-mariadb-b2/backup_source.sh --list`.
+
 Mỗi zip còn chứa thư mục `_nginx/` (`nginx.conf` = vhost từ `/etc/nginx/sites-available`, `nginx.enabled` = `enabled`/`disabled`) để dựng lại server mới. Site nào không có vhost thì bỏ qua.
 
 ### Cấu trúc backup source trên B2
